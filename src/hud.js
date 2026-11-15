@@ -4,6 +4,7 @@ import { BENDER_TYPES, MAX_HP } from './benders.js';
 import { FORMATS, WINS, PLAYER_COLORS, TEAM_COLORS, TEAM_NAMES } from './match.js';
 import { INPUT_SOURCES } from './input.js';
 import { isTouchDevice } from './touch.js';
+import { play, isMuted, setMuted } from './sfx.js';
 
 const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html !== undefined) e.innerHTML = html; return e; };
 
@@ -24,7 +25,11 @@ export function createScreens(stage, maps, handlers) {
 
   function show(node) { menu.innerHTML = ''; menu.append(node); menu.style.display = 'flex'; }
   function hideMenu() { menu.style.display = 'none'; menu.innerHTML = ''; }
-  function button(text, onclick, cls = '') { const b = el('button', 'btn ' + cls, text); b.onclick = onclick; return b; }
+  function button(text, onclick, cls = '') { const b = el('button', 'btn ' + cls, text); b.onclick = (e) => { play('click'); onclick(e); }; return b; }
+  function soundButton() {
+    const b = button(isMuted() ? 'Sound: Off' : 'Sound: On', () => { setMuted(!isMuted()); b.textContent = isMuted() ? 'Sound: Off' : 'Sound: On'; });
+    return b;
+  }
 
   // ---------- main menu ----------
   function showMain() {
@@ -34,6 +39,7 @@ export function createScreens(stage, maps, handlers) {
     box.append(button('Custom (sandbox, all tools)', () => { hideMenu(); handlers.onSandbox(); }));
     box.append(button('Host Online', () => handlers.onHostOnline()));
     box.append(button('Join Online', () => showJoin()));
+    box.append(soundButton());
     box.append(el('div', 'hint', isTouchDevice ? 'touch: left thumb joystick, right thumb buttons (hold to charge) &middot; play in landscape'
       : 'P1: arrows + Z X C A S V &nbsp;&middot;&nbsp; P2: I J K L + U O P H N M &nbsp;&middot;&nbsp; gamepads: stick + A / X Y RB LB B RT'));
     show(box);
@@ -107,6 +113,7 @@ export function createScreens(stage, maps, handlers) {
     box.append(el('h2', 'title small', 'PAUSED'));
     box.append(button('Resume', () => { hideMenu(); handlers.onResume(); }, 'primary'));
     box.append(button('Restart Match', () => { hideMenu(); handlers.onRematch(); }));
+    box.append(soundButton());
     box.append(button('Quit to Menu', () => { handlers.onQuit(); showMain(); }));
     show(box);
   }
@@ -248,6 +255,7 @@ export function createScreens(stage, maps, handlers) {
     if (!isHost) box.append(el('div', 'hint', 'the match keeps running'));
     box.append(button('Resume', () => { hideMenu(); handlers.onResume(); }, 'primary'));
     if (isHost) box.append(button('Back to Lobby', () => handlers.onOnlineLobby()));
+    box.append(soundButton());
     box.append(button(isHost ? 'Close Room' : 'Leave Match', () => handlers.onOnlineLeave()));
     show(box);
   }

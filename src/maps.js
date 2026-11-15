@@ -4,6 +4,7 @@
 // live hazards; env = { fx, players }. Terrain uses seeded noise, so a map looks the same
 // every time it's loaded.
 import { EL, KIND, Kind } from './elements.js';
+import { emit } from './sfx.js';
 
 // ---------- helpers ----------
 function rng(seed) {
@@ -235,7 +236,7 @@ export const MAPS = [
             if (grid.type[i] === EL.LAVA) grid.temp[i] = 1300;
           }
           if (t % 6 === 0) { const x = Math.floor(v.cx + (Math.random() - 0.5) * 10); if (grid.type[76 * grid.w + x] === 0) grid.set(x, 76, EL.SMOKE); }
-          if (--v.next <= 0) { v.erupting = 60; v.next = 600 + Math.floor(Math.random() * 480); }
+          if (--v.next <= 0) { emit('boom', v.cx, 12); v.erupting = 60; v.next = 600 + Math.floor(Math.random() * 480); }
           if (v.erupting > 0 && ps) {
             v.erupting--;
             for (let k = 0; k < 4; k++) ps.spawn(v.cx + (Math.random() - 0.5) * 8, 80, (Math.random() - 0.5) * 3.5, -4 - Math.random() * 4, EL.LAVA, { gravity: 0.1 });
@@ -390,6 +391,7 @@ export const MAPS = [
         }
         for (const p of env.players || []) if (!p.dead && Math.abs(p.x + 1.5 - x) < 6 && p.y + 12 >= y - 30) p.damage(25);
         if (env.fx) { env.fx.flash(4); env.fx.shake(5); }
+        emit('thunder', x);
       };
       return { spawns: spread(g, [0.08, 0.32, 0.68, 0.92]), tick };
     },

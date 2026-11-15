@@ -2,6 +2,7 @@
 import { Kind, KIND, EL } from './elements.js';
 import { BODY_W, BODY_H, createAnim, updateAnim } from './sprite.js';
 import { initAbilities } from './abilities.js';
+import { emit } from './sfx.js';
 
 export const BW = BODY_W;     // collision box width in cells
 export const BH = BODY_H;     // collision box height in cells
@@ -141,8 +142,8 @@ export class Player {
       this.vy += GRAVITY;
       if (d.glide && input.up && this.vy > d.glide) this.vy = d.glide;
       if (input.jump) {
-        if (this.onGround) this.vy = -d.jump;
-        else if (d.doubleJump && !this.usedDouble) { this.vy = -d.jump * 0.9; this.usedDouble = true; }
+        if (this.onGround) { this.vy = -d.jump; emit('jump', this.x); }
+        else if (d.doubleJump && !this.usedDouble) { this.vy = -d.jump * 0.9; this.usedDouble = true; emit('jump2', this.x); }
       }
       this.vy = Math.min(this.vy, MAX_FALL);
     }
@@ -170,7 +171,7 @@ export class Player {
     // without moveY ever being blocked, so don't rely on that).
     this.onGround = this.collide(Math.floor(this.x), Math.floor(this.y) + 1);
     const touchdown = this.onGround && !wasGround && impact > 0;
-    if (touchdown) this.vy = 0;
+    if (touchdown) { this.vy = 0; if (impact > 1.2) emit('land', this.x, impact); }
     if (this.onGround) this.usedDouble = false;
     if (this.flash > 0) this.flash--;
     updateAnim(this, env, touchdown ? impact : 0);
@@ -306,6 +307,7 @@ export class Player {
     }
     this.hp -= n;
     if (n >= 0.05) this.flash = 6;
+    if (n >= 0.3) emit('hit', this.x, n, 'hit' + this.id, 110);
     if (this.hp <= 0) this.die();
     return n;
   }
@@ -314,6 +316,7 @@ export class Player {
     this.hp = 0;
     this.dead = true;
     this.respawn = RESPAWN_TICKS;
+    emit('ko', this.x);
     if (this.onDeath) this.onDeath(this); // the match may change the respawn (or cancel it)
     const g = this.grid;
     const cx = Math.round(this.x + BW / 2), cy = Math.round(this.y + BH / 2);

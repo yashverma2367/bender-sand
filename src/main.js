@@ -8,7 +8,8 @@ import { TOOLS, EL, WIND_TOOL, KIND, Kind } from './elements.js';
 import { createRenderer } from './render.js';
 import { Player, BENDER_TYPES } from './benders.js';
 import { Particles } from './particles.js';
-import { updateAbilities, explode, creditDamage } from './abilities.js';
+import { updateAbilities, explode, creditDamage, channelInfo } from './abilities.js';
+import * as sfx from './sfx.js';
 import { buildUI } from './ui.js';
 import { MAPS, loadMap } from './maps.js';
 import { Match } from './match.js';
@@ -223,6 +224,7 @@ async function joinOnline(code, name, type) {
       guestView.players = j.p.map(guestPlayer);
       guestView.hud = j.h;
       guestView.since = 0;
+      if (j.s) for (const [n, x, sz] of j.s) sfx.play(n, x, sz);
       if (j.fx) { shake = Math.max(shake, j.fx.shake || 0); flash = Math.max(flash, j.fx.flash || 0); }
     },
     onResults: (r) => screens.showResults({ result: r }, 'guest'),
@@ -239,7 +241,7 @@ function guestPlayer(v) {
   return {
     x: v.x, y: v.y, vx: v.vx, vy: v.vy, facing: v.f, type: v.t, color: v.c, dead: !!v.d,
     invulnT: v.iv, flash: v.fl, frozenT: v.fz, flameHair: !!v.fh, hp: v.hp, energy: v.en, ult: v.u, air: v.a,
-    def: BENDER_TYPES[v.t], afterimages: v.ai,
+    def: BENDER_TYPES[v.t], afterimages: v.ai, channel: v.ch ? { slot: v.ch[0], t: v.ch[1] } : null,
     anim: { j: v.an.j, n: v.an.n, rx: v.an.rx, ry: v.an.ry, state: v.an.s, t: v.an.t, blink: 0 },
   };
 }
@@ -381,6 +383,25 @@ function tick() {
 
 // ---------- loop ----------
 let last = performance.now(), acc = 0, frames = 0, statTime = last, netTicks = 0;
+let netSounds = []; // sound events waiting for the next snapshot
+
+// Sounds: play what the simulation emitted this frame (only while actually playing, so the idle
+// menu map stays quiet), hum the held-move loops, and beep the countdown.
+let lastCount = -1, lastOver = false;
+function sounds() {
+  const playing = state.mode === 'sandbox' || state.mode === 'match' || state.mode === 'guest';
+  const events = sfx.drain();
+  if (playing && !state.paused) for (const [n, x, s] of events) sfx.play(n, x, s);
+  if (net && match) netSounds.push(...events.slice(0, 40 - netSounds.length));
+  const list = playing && !state.paused ? (state.mode === 'guest' ? guestView.players : world.players) : [];
+  sfx.updateLoops(list.map((p, k) => { const c = !p.dead && channelInfo(p.type, p.channel); return { id: k, key: c && c.key, prog: c ? c.prog : 0, x: p.x }; }));
+  const m = state.mode === 'guest' ? guestView.hud && { countdown: guestView.hud.cd, over: guestView.hud.over } : match;
+  if (!m || !playing) { lastCount = -1; lastOver = false; return; }
+  const n = m.countdown > 0 ? Math.ceil(m.countdown / 60) : 0;
+  if (n !== lastCount) { if (n > 0) sfx.play('beep'); else if (lastCount > 0) sfx.play('fight'); lastCount = n; }
+  if (m.over && !lastOver) sfx.play('game');
+  lastOver = !!m.over;
+}
 
 function frame(now) {
   acc += Math.min(now - last, 250);
@@ -390,11 +411,12 @@ function frame(now) {
     if (state.mode === 'guest') { if (guest) guestTick(now); }
     else if (!state.paused) tick();
     acc -= TICK_MS;
-    if (net && match && (++netTicks & 1) === 0) net.sendSnapshot(world, match, { shake, flash, paused: state.paused });
+    if (net && match && (++netTicks & 1) === 0) { net.sendSnapshot(world, match, { shake, flash, paused: state.paused }, netSounds); netSounds = []; }
     steps++;
   }
   if (steps === 4) acc = 0; // too slow: drop backlog instead of spiraling
 
+  sounds();
   renderer.draw(state.heatView);
   if (tools() && mouse.inside) renderer.drawBrush(mouse.x, mouse.y, state.brush);
   renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles);
@@ -424,5 +446,5 @@ requestAnimationFrame(frame);
 
 // Test hook: ?debug exposes the internals to the console.
 if (new URLSearchParams(window.location.search).has('debug')) {
-  window.__bs = { state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
+  window.__bs = { sfx, state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
 }

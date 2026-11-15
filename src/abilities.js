@@ -9,6 +9,7 @@
 import { EL, Kind, KIND, IGNITE_T } from './elements.js';
 import { MAX_HP } from './benders.js';
 import { BODY_W as BW, BODY_H as BH } from './sprite.js';
+import { emit } from './sfx.js';
 
 export const SLOTS = ['basic', 'heavy', 'special', 'defense', 'mobility', 'ultimate'];
 export const SLOT_KEYS = { z: 'basic', x: 'heavy', c: 'special', a: 'defense', s: 'mobility', v: 'ultimate' };
@@ -96,6 +97,7 @@ export function initAbilities(p) {
 // including obsidian.
 export function explode(world, x, y, r, type, breakStatic = false, knockPlayer = true, owner = currentOwner) {
   const { grid: g, particles: ps, fx } = world;
+  if (r >= 5) emit('boom', x, r); else emit('boom', x, r, 'smallboom', 60);
   const cx = Math.floor(x), cy = Math.floor(y), R = Math.ceil(r);
   const force = 2.5 + r * 0.9;
   const heat = type === EL.FIRE || type === EL.LAVA ? 450 : 0;
@@ -1457,6 +1459,12 @@ function boulderPos(c, ch) {
 
 // ---------- per-tick update ----------
 // world: { grid, particles, fx }. input.held[slot] is true while that key is down.
+// Held move in progress, for the sound loops: { key: 'fire.defense', prog: 0..1 } or null.
+export function channelInfo(type, ch) {
+  const m = ch && KITS[type] && KITS[type][ch.slot];
+  return m ? { key: `${type}.${ch.slot}`, prog: ch.t / m.maxHold } : null;
+}
+
 export function updateAbilities(p, input, world) {
   currentOwner = p.id;
   world.particles.defaultOwner = p.id + 1;
@@ -1500,6 +1508,7 @@ export function updateAbilities(p, input, world) {
     } else {
       p.cd[ch.slot] = m.cooldown;
       if (m.release) m.release(c, ch); // (may shorten the cooldown, e.g. a fizzled charge)
+      emit(p.cd[ch.slot] < m.cooldown ? 'fizzle' : `${p.type}.${ch.slot}.release`, p.x);
       p.channel = null;
     }
     return;
@@ -1519,6 +1528,7 @@ export function updateAbilities(p, input, world) {
     } else {
       const before = p.cast;
       m.cast(c);
+      emit(`${p.type}.${s}`, p.x);
       p.cd[s] = m.cooldown;
       if (p.cast === before) p.cast = { pose: m.pose, t: m.poseTime }; // unless the move set its own
     }

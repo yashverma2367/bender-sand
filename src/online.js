@@ -127,7 +127,7 @@ export class HostSession {
   }
 
   // Called every other tick during a match.
-  sendSnapshot(world, match, fx) {
+  sendSnapshot(world, match, fx, sounds = []) {
     const live = this.guests.filter((g) => !g.gone && g.snap && g.snap.readyState === 'open');
     if (!live.length) return;
     cellCodes(this.grid, this.cur.cells);
@@ -139,7 +139,7 @@ export class HostSession {
         feed: match.feed.slice(-5).map((f) => ({ text: f.text, color: f.color })),
         players: match.players.map((p) => ({ name: p.name, color: p.color, out: p.out, lives: p.lives, kos: p.kos, type: p.type })),
       },
-      fx, paused: fx.paused,
+      fx, paused: fx.paused, s: sounds,
     };
     for (const g of live) {
       if (g.busy > 2 || g.snap.bufferedAmount > SNAP_BACKLOG) continue; // let it catch up (diff stays valid)
