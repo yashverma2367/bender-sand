@@ -1,0 +1,428 @@
+// Entry: canvas, modes (menu / custom sandbox / match), input, fixed-timestep loop.
+//   menu     - main menu & match setup over an idle map
+//   sandbox  - "Custom": one bender (keyboard 1) plus every painting / dev tool
+//   match    - local or hosted online match (2-4 benders, no painting tools unless online Custom)
+//   guest    - joined someone's online match: render the host's snapshots, send our input
+import { Grid } from './grid.js';
+import { TOOLS, EL, WIND_TOOL, KIND, Kind } from './elements.js';
+import { createRenderer } from './render.js';
+import { Player, BENDER_TYPES } from './benders.js';
+import { Particles } from './particles.js';
+import { updateAbilities, explode, creditDamage } from './abilities.js';
+import { buildUI } from './ui.js';
+import { MAPS, loadMap } from './maps.js';
+import { Match } from './match.js';
+import { createScreens } from './hud.js';
+import { attachKeyboard, createInput, sampleInput, isDown, GAME_KEYS } from './input.js';
+import { createTouchControls, isTouchDevice } from './touch.js';
+import { HostSession, GuestSession } from './online.js';
+import { applySnapshot } from './net.js';
+import { onlineConfigured } from './signal.js';
+
+// World: wide enough for 3-4 benders, always shown in full.
+const W = 640, H = 216;
+const TICK_MS = 1000 / 60;
+const MAX_BRUSH = 30;
+const WIND_STRENGTH = 0.8; // force per grid cell of mouse drag
+
+const canvas = document.getElementById('game');
+const stage = document.getElementById('stage');
+const toolbarEl = document.getElementById('toolbar');
+const statsEl = document.getElementById('stats');
+const helpEl = document.getElementById('help');
+
+const grid = new Grid(W, H);
+const renderer = createRenderer(grid, canvas);
+const particles = new Particles(grid);
+
+// Screen shake (CSS offset) and flash (CSS brightness), both decaying every frame.
+let shake = 0, flash = 0;
+const fx = {
+  shake: (n) => { shake = Math.max(shake, n); },
+  flash: (n) => { flash = Math.max(flash, n); },
+};
+const world = { grid, particles, fx, player: null, players: [] };
+particles.onImpact = (x, y, r, type, owner) => explode(world, x, y, r, type, r >= 6, true, owner);
+particles.bodies = world.players;                                        // projectiles can hit benders
+particles.onHit = (attackerId, victim, dmg) => creditDamage(world, attackerId, dmg); // ...and charge the attacker's ult
+
+const state = { mode: 'menu', selected: EL.SAND, brush: 4, paused: false, heatView: false, fps: 0, count: 0, map: null };
+let match = null, lastMatch = null, resultsShown = false;
+let mapTick = null; // live map hazards (e.g. erupting volcanoes)
+const mapEnv = { fx, players: world.players };
+let tickCount = 0;
+
+const sandboxPlayer = new Player(grid, 'fire');
+const sandboxSource = isTouchDevice ? 'touch' : 'kb1';
+const sandboxInput = createInput();
+attachKeyboard();
+
+// ---------- online ----------
+let net = null;    // HostSession while hosting
+let guest = null;  // GuestSession while joined to someone
+const guestView = { players: [], hud: null, since: 0, you: 1, lobby: null };
+const guestInput = createInput();
+const onlineCustom = () => state.mode === 'match' && !!net && !!match && !!match.cfg.custom;
+
+// ---------- view ----------
+const view = { x: 0, y: 0, w: W, h: H };
+renderer.setView(view);
+canvas.style.aspectRatio = `${W} / ${H}`;
+function layout() { // the canvas gets more room when the sandbox toolbar is hidden
+  const sandbox = state.mode === 'sandbox' || onlineCustom();
+  const reserve = sandbox ? 290 : isTouchDevice ? 16 : 70;
+  stage.style.width = `min(calc(100vw - ${isTouchDevice ? 8 : 32}px), calc((100vh - ${reserve}px) * ${(W / H).toFixed(3)}))`;
+  document.body.classList.toggle('playing', state.mode === 'match' || state.mode === 'guest');
+  for (const k of [0, 1]) if (toolbarEl.children[k]) toolbarEl.children[k].style.display = net ? 'none' : ''; // map / bender rows: Custom only
+  canvas.style.width = '100%';
+  toolbarEl.style.display = sandbox ? '' : 'none';
+  statsEl.style.display = sandbox ? '' : 'none';
+  helpEl.style.display = sandbox ? '' : 'none';
+}
+
+// ---------- modes ----------
+function setPlayers(list) {
+  world.players.length = 0;
+  world.players.push(...list);
+  world.player = list[0] || null;
+}
+
+function useMap(m) {
+  const { spawns, tick } = loadMap(grid, particles, m);
+  state.map = m.id;
+  mapTick = tick || null;
+  return spawns;
+}
+
+function startSandbox() {
+  state.mode = 'sandbox'; state.paused = false;
+  match = null;
+  sandboxPlayer.team = null;
+  setPlayers([sandboxPlayer]);
+  sandboxPlayer.spawnX = useMap(MAPS[0])[0];
+  sandboxPlayer.spawn();
+  layout(); ui.refresh();
+}
+
+function startMatch(cfg, slots) {
+  lastMatch = { cfg, slots };
+  state.mode = 'match'; state.paused = false; resultsShown = false;
+  match = new Match(world, cfg, slots);
+  match.players.forEach((p, k) => { p.input = createInput(); if (slots[k].net) p.input.net = slots[k].net; });
+  setPlayers(match.players);
+  match.start(useMap(cfg.map));
+  layout();
+}
+
+function toMenu() {
+  state.mode = 'menu'; state.paused = false;
+  match = null;
+  setPlayers([]);
+  useMap(MAPS[1]); // something alive behind the menu
+  layout();
+  screens.updateHUD(null);
+}
+
+// Pause / back, shared by Esc and the touch pause button.
+function pauseOrBack() {
+  if (state.mode === 'guest' && !screens.menuOpen()) screens.showOnlinePause(false);
+  else if (state.mode === 'match' && net && !screens.menuOpen()) { state.paused = true; screens.showOnlinePause(true); }
+  else if (state.mode === 'match' && !screens.menuOpen()) { state.paused = true; screens.showPause(); }
+  else if (state.mode === 'sandbox') { toMenu(); screens.showMain(); }
+}
+
+const touch = isTouchDevice ? createTouchControls(document.body, { onPause: () => pauseOrBack() }) : null;
+function updateTouch() { // on-screen controls only while actually playing
+  if (!touch) return;
+  const tp = state.mode === 'sandbox' ? sandboxPlayer
+    : state.mode === 'guest' ? guestView.players[guestView.you]
+    : world.players.find((p) => p.source === 'touch' || p.source === 'local');
+  touch.show(!!tp && !screens.menuOpen() && !state.paused);
+  if (tp) touch.setBender(tp.type);
+}
+
+const screens = createScreens(stage, MAPS, {
+  onSandbox: startSandbox,
+  onStartMatch: startMatch,
+  onResume: () => { state.paused = false; },
+  onRematch: () => {
+    if (!lastMatch) return;
+    if (net) { net.startMatch(lastMatch.cfg.map.id); startMatch(lastMatch.cfg, net.slots()); }
+    else startMatch(lastMatch.cfg, lastMatch.slots);
+  },
+  onQuit: toMenu,
+  onHostOnline: hostOnline,
+  onJoinOnline: joinOnline,
+  onOnlineLobby: () => { if (net) { toMenu(); net.backToLobby(); showHostLobby(); } },
+  onOnlineLeave: leaveOnline,
+});
+
+// ---------- hosting ----------
+function showHostLobby() {
+  if (!net || net.inMatch) return;
+  screens.showLobby(net.lobby(), {
+    isHost: true, you: 0,
+    onCfg: (c) => { net.cfg = c; net.lobbyChanged(); },
+    onType: (t) => { net.me.type = t; net.lobbyChanged(); },
+    onName: (n) => { net.me.name = n; net.lobbyChanged(); },
+    onTeam: (k, t) => { if (k === 0) net.me.team = t; else if (net.guests[k - 1]) net.guests[k - 1].team = t; net.lobbyChanged(); },
+    onStart: () => {
+      const c = net.cfg;
+      const map = c.map === 'random' ? MAPS[(Math.random() * MAPS.length) | 0] : MAPS.find((m) => m.id === c.map);
+      net.startMatch(map.id);
+      screens.hideMenu();
+      startMatch({ format: c.format, win: c.win, map, custom: c.customKey === 'on', online: true }, net.slots());
+    },
+    onLeave: leaveOnline,
+  });
+}
+
+async function hostOnline() {
+  if (!onlineConfigured()) { screens.showOnlineSetupNeeded(); return; }
+  if (net) net.close();
+  net = new HostSession(grid, {
+    onLobby: () => { if (state.mode === 'menu') showHostLobby(); },
+    onGuestLeft: (name) => { if (match) match.feed.push({ text: `${name} left`, color: '#9aa0ae', t: match.t }); },
+  });
+  net.me.name = screens.online.name || 'Host';
+  net.me.type = screens.online.type;
+  screens.showOnlineMessage('HOSTING', 'creating room...');
+  try { await net.open(); showHostLobby(); }
+  catch (e) { net = null; screens.showOnlineMessage('COULD NOT HOST', e.message || String(e)); }
+}
+
+function leaveOnline() {
+  if (net) { net.close(); net = null; }
+  if (guest) { guest.leave(); guest = null; }
+  toMenu(); screens.showMain();
+}
+
+// ---------- joining ----------
+function showGuestLobby(status = '') {
+  if (!guest || !guestView.lobby) return;
+  screens.showLobby(guestView.lobby, {
+    isHost: false, you: guestView.you, status,
+    onType: (t) => guest.setType(t), onLeave: leaveOnline,
+  });
+}
+
+async function joinOnline(code, name, type) {
+  if (!onlineConfigured()) throw new Error('Online is not set up yet (see ONLINE.md)');
+  if (guest) guest.leave();
+  const g = new GuestSession({
+    onLobby: (lobby, you) => { guestView.lobby = lobby; guestView.you = you; if (state.mode !== 'guest') showGuestLobby(); },
+    onStart: () => {
+      state.mode = 'guest'; state.paused = false; match = null; mapTick = null; resultsShown = false;
+      setPlayers([]); grid.clear(); particles.clear();
+      Object.assign(guestView, { players: [], hud: null, since: 0 });
+      screens.hideMenu(); layout();
+    },
+    onSnapshot: (bytes) => {
+      if (state.mode !== 'guest') return;
+      const j = applySnapshot(bytes, grid, particles);
+      guestView.players = j.p.map(guestPlayer);
+      guestView.hud = j.h;
+      guestView.since = 0;
+      if (j.fx) { shake = Math.max(shake, j.fx.shake || 0); flash = Math.max(flash, j.fx.flash || 0); }
+    },
+    onResults: (r) => screens.showResults({ result: r }, 'guest'),
+    onLobbyBack: () => { toMenu(); showGuestLobby(); },
+    onClosed: (why) => { if (guest) guest.leave(); guest = null; toMenu(); screens.showOnlineMessage('DISCONNECTED', why); },
+  });
+  await g.join(code, name, type);
+  guest = g;
+  if (guestView.lobby) showGuestLobby(); else screens.showOnlineMessage('CONNECTED', 'waiting for the lobby...');
+}
+
+// Snapshot player -> object the renderer can draw.
+function guestPlayer(v) {
+  return {
+    x: v.x, y: v.y, vx: v.vx, vy: v.vy, facing: v.f, type: v.t, color: v.c, dead: !!v.d,
+    invulnT: v.iv, flash: v.fl, frozenT: v.fz, flameHair: !!v.fh, hp: v.hp, energy: v.en, ult: v.u, air: v.a,
+    def: BENDER_TYPES[v.t], afterimages: v.ai,
+    anim: { j: v.an.j, n: v.an.n, rx: v.an.rx, ry: v.an.ry, state: v.an.s, t: v.an.t, blink: 0 },
+  };
+}
+
+// HUD data for a guest, shaped like a Match.
+function guestHud() {
+  const h = guestView.hud;
+  if (!h) return null;
+  return {
+    clockText: () => h.clock, countdown: h.cd, over: h.over, result: null, t: h.t, win: { lives: h.lives }, feed: h.feed,
+    players: h.players.map((p, k) => ({ ...p, dead: guestView.players[k]?.dead, hp: guestView.players[k]?.hp ?? 0, ult: guestView.players[k]?.ult ?? 0 })),
+  };
+}
+
+function guestTick(now) {
+  guest.sendInput(sampleInput('local', guestInput), now);
+  if (guestView.since++ < 3) { // between snapshots: keep things moving
+    for (let i = 0; i < particles.n; i++) { particles.x[i] += particles.vx[i]; particles.y[i] += particles.vy[i]; }
+    for (const p of guestView.players) if (!p.dead) { p.x += p.vx; p.y += p.vy; }
+  }
+}
+
+// ---------- sandbox toolbar (Custom mode only) ----------
+const ui = buildUI(state, sandboxPlayer, {
+  onSelect: (id) => { state.selected = id; ui.refresh(); },
+  onClear: () => { grid.clear(); particles.clear(); },
+  onPause: () => { state.paused = !state.paused; ui.refresh(); },
+  onHeat: () => { state.heatView = !state.heatView; ui.refresh(); },
+  onBender: (type) => { sandboxPlayer.setType(type); ui.refresh(); },
+  maps: MAPS,
+  onMap: (m) => { sandboxPlayer.spawnX = useMap(m)[0]; sandboxPlayer.spawn(); ui.refresh(); },
+});
+
+// ---------- mouse painting (Custom mode only) ----------
+const mouse = { x: 0, y: 0, inside: false, down: false, erase: false };
+const tools = () => state.mode === 'sandbox' || onlineCustom();
+const toolPlayer = () => (state.mode === 'sandbox' ? sandboxPlayer : world.players[0]);
+
+function toGrid(e) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: view.x + Math.floor(((e.clientX - r.left) / r.width) * view.w),
+    y: view.y + Math.floor(((e.clientY - r.top) / r.height) * view.h),
+  };
+}
+const tool = () => (mouse.erase ? EL.EMPTY : state.selected);
+
+function paintLine(x0, y0, x1, y1) {
+  const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+  for (let s = 0; s <= steps; s++) {
+    grid.paint(Math.round(x0 + ((x1 - x0) * s) / steps), Math.round(y0 + ((y1 - y0) * s) / steps), state.brush, tool());
+  }
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  if (!tools()) return;
+  canvas.setPointerCapture(e.pointerId);
+  const p = toGrid(e);
+  Object.assign(mouse, p, { down: true, inside: true, erase: e.button === 2 });
+  if (tool() !== WIND_TOOL) grid.paint(p.x, p.y, state.brush, tool());
+});
+canvas.addEventListener('pointermove', (e) => {
+  const p = toGrid(e);
+  if (mouse.down && tools()) {
+    if (tool() === WIND_TOOL) grid.addWind(p.x, p.y, state.brush, (p.x - mouse.x) * WIND_STRENGTH, (p.y - mouse.y) * WIND_STRENGTH);
+    else paintLine(mouse.x, mouse.y, p.x, p.y);
+  }
+  mouse.x = p.x; mouse.y = p.y; mouse.inside = true;
+});
+const release = () => { mouse.down = false; };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('pointerleave', () => { mouse.inside = false; });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('wheel', (e) => {
+  if (!tools()) return;
+  e.preventDefault();
+  state.brush = Math.max(0, Math.min(MAX_BRUSH, state.brush + (e.deltaY < 0 ? 1 : -1)));
+  ui.refresh();
+}, { passive: false });
+
+// ---------- keys ----------
+const keyToTool = new Map(TOOLS.map((t) => [t.key, t.id]));
+const BENDER_KEYS = new Set(['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'z', 'x', 'c', 'a', 's', 'v', 'p']);
+
+window.addEventListener('keydown', (e) => {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
+  const k = e.key.toLowerCase();
+  if (GAME_KEYS.has(k) || k === ' ') e.preventDefault();
+
+  if (k === 'escape') { pauseOrBack(); return; }
+  if (!tools() || BENDER_KEYS.has(k)) return;
+
+  // Custom mode: painting / dev keys. (Bender controls are read from the keyboard state.)
+  if (keyToTool.has(k)) state.selected = keyToTool.get(k);
+  else if (k === ' ') state.paused = !state.paused;
+  else if (k === 'backspace') { grid.clear(); particles.clear(); }
+  else if (k === 'h') state.heatView = !state.heatView;
+  else if (k === 'u') toolPlayer().ult = 100; // testing: fill the ultimate (it normally charges only from damage dealt)
+  else if (k === 'k') toolPlayer().damage(toolPlayer().hp);
+  else if (k === '[') state.brush = Math.max(0, state.brush - 1);
+  else if (k === ']') state.brush = Math.min(MAX_BRUSH, state.brush + 1);
+  else return;
+  ui.refresh();
+});
+
+// ---------- particle test hose (Custom mode: hold P) ----------
+function hose(p, inp) {
+  if (p.dead) return;
+  let t = state.selected;
+  if (t === 0 || t === WIND_TOOL) t = EL.SAND;
+  const aim = inp.up ? -1.6 : inp.down ? 0.6 : -0.6;
+  for (let k = 0; k < 2; k++) {
+    particles.spawn(p.x + 1.5 + p.facing * 2, p.y + 4, p.facing * (2.6 + Math.random() * 0.8) + p.vx, aim + (Math.random() - 0.5) * 0.6,
+      t, { bounces: KIND[t] === Kind.POWDER || KIND[t] === Kind.STATIC ? 2 : 0 });
+  }
+}
+
+// ---------- simulation tick ----------
+function tick() {
+  if (tools() && mouse.down && tool() !== WIND_TOOL) grid.paint(mouse.x, mouse.y, state.brush, tool());
+  grid.step();
+  if (mapTick) mapTick(grid, particles, tickCount++, mapEnv);
+  if (match) match.tick();
+  if (tools() && isDown('p')) hose(toolPlayer(), sandboxInput);
+  particles.step();
+  for (const p of world.players) {
+    const inp = state.mode === 'sandbox' ? sampleInput(sandboxSource, sandboxInput) : sampleInput(p.source, p.input);
+    p.update(inp);
+    updateAbilities(p, inp, world);
+    particles.defaultOwner = 0; // particles spawned outside a bender's moves belong to nobody
+  }
+  if (match && match.result && !resultsShown) {
+    resultsShown = true;
+    screens.showResults(match, net ? 'host' : undefined);
+    if (net) net.sendResults(match.result);
+  }
+}
+
+// ---------- loop ----------
+let last = performance.now(), acc = 0, frames = 0, statTime = last, netTicks = 0;
+
+function frame(now) {
+  acc += Math.min(now - last, 250);
+  last = now;
+  let steps = 0;
+  while (acc >= TICK_MS && steps < 4) {
+    if (state.mode === 'guest') { if (guest) guestTick(now); }
+    else if (!state.paused) tick();
+    acc -= TICK_MS;
+    if (net && match && (++netTicks & 1) === 0) net.sendSnapshot(world, match, { shake, flash, paused: state.paused });
+    steps++;
+  }
+  if (steps === 4) acc = 0; // too slow: drop backlog instead of spiraling
+
+  renderer.draw(state.heatView);
+  if (tools() && mouse.inside) renderer.drawBrush(mouse.x, mouse.y, state.brush);
+  renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles);
+  if (flash > 0) { canvas.style.filter = `brightness(${1 + flash * 0.25})`; if (--flash === 0) canvas.style.filter = ''; }
+  if (shake > 0.2) {
+    const sx = (Math.random() - 0.5) * shake * 2, sy = (Math.random() - 0.5) * shake * 2;
+    canvas.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px)`;
+    shake *= 0.85;
+  } else if (shake) { shake = 0; canvas.style.transform = ''; }
+
+  frames++;
+  if (frames % 4 === 0) { screens.updateHUD(state.mode === 'guest' ? guestHud() : match); updateTouch(); }
+  if (now - statTime >= 500) {
+    state.fps = Math.round((frames * 1000) / (now - statTime));
+    state.count = grid.count();
+    state.particles = particles.n;
+    frames = 0;
+    statTime = now;
+    if (state.mode === 'sandbox') ui.refresh();
+  }
+  requestAnimationFrame(frame);
+}
+
+toMenu();
+screens.showMain();
+requestAnimationFrame(frame);
+
+// Test hook: ?debug exposes the internals to the console.
+if (new URLSearchParams(window.location.search).has('debug')) {
+  window.__bs = { state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
+}

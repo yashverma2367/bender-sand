@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Bender Sand</title>
+  <link rel="icon" href="data:,">
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #08090c;
+      color: #c9ccd4;
+      font: 13px/1.4 ui-monospace, Menlo, monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+    }
+    h1 { margin: 0; font-size: 15px; letter-spacing: 0.15em; color: #e8b04a; }
+    #toolbar { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+    .row { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; align-items: center; }
+    .label { width: 52px; text-align: right; color: #555a68; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .tool {
+      display: flex; align-items: center; gap: 6px;
+      background: #161820; color: inherit; font: inherit;
+      border: 1px solid #2a2d38; border-radius: 6px;
+      padding: 3px 8px; cursor: pointer;
+    }
+    .tool:hover { border-color: #4a4f60; }
+    .tool.active { border-color: #e8b04a; background: #221d12; color: #fff; }
+    .tool.action { color: #9aa0ae; }
+    .swatch { width: 12px; height: 12px; border-radius: 2px; }
+    .eraser .swatch { border: 1px dashed #777; }
+    kbd { font: 10px ui-monospace, monospace; color: #6c7180; border: 1px solid #333744; border-radius: 3px; padding: 0 3px; }
+    #game {
+      width: 100%;
+      image-rendering: pixelated;
+      border: 1px solid #22252f;
+      cursor: none;
+      touch-action: none;
+      background: #0e0f14;
+    }
+    #stats { color: #7d8291; }
+    #stage { position: relative; display: block; line-height: 0; }
+    #game { display: block; }
+    .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+      background: rgba(8, 9, 12, 0.72); line-height: 1.4; z-index: 5; }
+    .panel { background: #12141b; border: 1px solid #2a2d38; border-radius: 10px; padding: 18px 22px;
+      display: flex; flex-direction: column; gap: 8px; min-width: 300px; max-height: 92%; overflow: auto; }
+    .panel.wide { min-width: 560px; }
+    .title { margin: 0 0 2px; text-align: center; color: #e8b04a; letter-spacing: 0.2em; font-size: 22px; }
+    .title.small { font-size: 16px; }
+    .sub, .hint { text-align: center; color: #6c7180; font-size: 11px; }
+    .btn { background: #1b1e27; color: #c9ccd4; font: inherit; border: 1px solid #2f3340; border-radius: 6px;
+      padding: 7px 12px; cursor: pointer; }
+    .btn:hover { border-color: #5a6074; }
+    .btn.primary { background: #3a2a10; border-color: #e8b04a; color: #fff; }
+    .btn.active { border-color: #e8b04a; color: #fff; background: #221d12; }
+    .btn.disabled { opacity: 0.4; cursor: default; }
+    .choice { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .choice .btn { padding: 4px 9px; }
+    .clabel { width: 56px; color: #6c7180; font-size: 11px; text-transform: uppercase; }
+    .slots { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+    .slot { display: flex; gap: 6px; align-items: center; }
+    .slot.off > :not(.toggle) { opacity: 0.35; }
+    .slot input, .slot select { background: #0e1016; color: #c9ccd4; border: 1px solid #2f3340; border-radius: 5px; padding: 4px 6px; font: inherit; }
+    .slot input { width: 110px; }
+    .toggle { width: 30px; padding: 4px 0; border-width: 2px; }
+    .err { color: #ff7a6a; min-height: 16px; font-size: 11px; }
+    .txt, .sel { background: #0e1016; color: #c9ccd4; border: 1px solid #2f3340; border-radius: 5px; padding: 5px 7px; font: inherit; }
+    .txt.code { width: 110px; text-transform: uppercase; letter-spacing: 0.3em; font-size: 16px; text-align: center; }
+    .roomcode { text-align: center; color: #9aa0ae; letter-spacing: 0.1em; }
+    .roomcode b { color: #e8b04a; font-size: 26px; letter-spacing: 0.35em; margin-left: 8px; user-select: all; }
+    .ptag { width: 44px; text-align: center; border: 2px solid; border-radius: 5px; padding: 3px 0; font-size: 11px; font-weight: bold; }
+    .pname { width: 130px; color: #fff; } .ptype { width: 90px; color: #9aa0ae; }
+    .btn.static { cursor: default; } .btn.static:not(.active) { opacity: 0.5; }
+    .actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .results { display: flex; flex-direction: column; gap: 4px; }
+    .rrow { display: flex; gap: 10px; align-items: center; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .rname { width: 120px; color: #fff; } .rtype { width: 60px; color: #8a90a0; } .rstat { width: 80px; }
+    .hud { position: absolute; inset: 0; pointer-events: none; display: none; line-height: 1.3; z-index: 4; }
+    .cards { position: absolute; left: 6px; right: 6px; top: 6px; display: flex; justify-content: space-between; gap: 6px; }
+    .card { background: rgba(10, 11, 16, 0.72); border-left: 3px solid; border-radius: 4px; padding: 3px 7px; width: 150px; font-size: 11px; }
+    .card.out { opacity: 0.35; }
+    .cname { font-weight: bold; } .cinfo { color: #9aa0ae; }
+    .bar { height: 4px; background: #3a1414; margin-top: 2px; } .bar i { display: block; height: 100%; background: #4cd964; }
+    .bar.ult { background: #221833; } .bar.ult i { background: #c070ff; }
+    .clock { position: absolute; top: 46px; left: 0; right: 0; text-align: center; color: #e8e2d0; font-size: 14px; text-shadow: 0 1px 2px #000; }
+    .feed { position: absolute; right: 8px; top: 66px; text-align: right; font-size: 11px; text-shadow: 0 1px 2px #000; }
+    .banner { position: absolute; top: 40%; left: 0; right: 0; text-align: center; font-size: 46px; font-weight: bold;
+      color: #e8b04a; letter-spacing: 0.15em; text-shadow: 0 3px 8px #000; }
+
+    /* ---- touch controls ---- */
+    .touch { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 6; user-select: none; -webkit-user-select: none; }
+    .touch * { touch-action: none; -webkit-tap-highlight-color: transparent; }
+    .stick { position: absolute; left: max(18px, env(safe-area-inset-left)); bottom: 22px; width: 128px; height: 128px; border-radius: 50%;
+      background: rgba(255, 255, 255, 0.06); border: 2px solid rgba(255, 255, 255, 0.18); pointer-events: auto; }
+    .knob { position: absolute; left: 39px; top: 39px; width: 50px; height: 50px; border-radius: 50%; background: rgba(232, 176, 74, 0.45);
+      border: 2px solid rgba(232, 176, 74, 0.8); }
+    .tbtns { position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: 14px; display: grid;
+      grid-template-columns: 58px 58px 76px; grid-template-rows: repeat(3, 48px); gap: 6px; pointer-events: auto; }
+    .tb { border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.2); background: rgba(20, 22, 30, 0.38); color: #e8e2d0;
+      font: 10px ui-monospace, monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 0;
+      text-shadow: 0 1px 2px #000; }
+    .tb b { font-size: 10px; } .tb i { font-style: normal; color: #9aa0b0; font-size: 9px; }
+    .tb.down { background: rgba(232, 176, 74, 0.45); border-color: #e8b04a; }
+    .tb-ult { border-color: rgba(192, 112, 255, 0.6); }
+    .tb-jump { grid-column: 3; grid-row: 2 / span 2; width: 76px; height: 76px; align-self: center; border-radius: 50%;
+      background: rgba(78, 168, 255, 0.22); border-color: rgba(78, 168, 255, 0.7); }
+    .tpause { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); width: 48px; height: 32px; border-radius: 8px;
+      background: rgba(20, 22, 30, 0.6); border: 1px solid #3a3f4e; color: #c9ccd4; pointer-events: auto; font-size: 12px; }
+    /* tablets: bigger thumbs targets */
+    @media (min-width: 1000px) and (min-height: 600px) {
+      .stick { width: 150px; height: 150px; } .knob { left: 48px; top: 48px; }
+      .tbtns { grid-template-columns: 70px 70px 92px; grid-template-rows: repeat(3, 58px); gap: 8px; }
+      .tb-jump { width: 92px; height: 92px; } .tb b { font-size: 12px; }
+    }
+
+    /* ---- small screens ---- */
+    @media (max-width: 900px), (max-height: 500px) {
+      body { padding: 4px; gap: 4px; }
+      body.playing h1 { display: none; }
+      .panel, .panel.wide { min-width: 0; width: min(560px, 96vw); padding: 12px 14px; }
+      .slot { flex-wrap: wrap; } .slot input { width: 90px; }
+      .card { width: auto; min-width: 0; flex: 1; font-size: 9px; padding: 2px 5px; }
+      .clock { top: 40px; font-size: 11px; } .feed { top: 54px; font-size: 9px; }
+      .banner { font-size: 30px; }
+      .title { font-size: 18px; }
+    }
+    .rotate { display: none; }
+    @media (pointer: coarse) and (orientation: portrait) {
+      .rotate { display: flex; position: fixed; inset: 0; z-index: 20; background: #08090c; color: #e8b04a; align-items: center;
+        justify-content: center; text-align: center; font-size: 16px; letter-spacing: 0.1em; padding: 30px; }
+    }
+    #help { color: #555a68; font-size: 11px; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>BENDER SAND</h1>
+  <div id="toolbar"></div>
+  <div class="rotate">&#8635;<br>Rotate your device to landscape to play</div>
+  <div id="stage"><canvas id="game"></canvas></div>
+  <div id="stats"></div>
+  <div id="help">arrows: move · up: jump / swim · Z signature · X heavy (hold) · C special (hold) · A power move · S dash · V ultimate (charges from damage dealt) · hold up/down to aim<br>left drag: paint · right drag: erase · scroll or [ ]: brush · H: heat view · U: fill ultimate (testing) · space: pause · ⌫: clear · K: self-destruct · P: particle hose · Esc: menu</div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
