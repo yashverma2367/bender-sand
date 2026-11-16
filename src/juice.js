@@ -24,7 +24,7 @@ export function popup(x, y, text, color = '#ffffff') {
   juice.popups.push({ x, y, text: String(text), color, life: 50 });
 }
 
-export const ULT_NAMES = { fire: 'INFERNO ASCENSION', earth: 'TECTONIC RUPTURE', water: 'GLACIAL CATACLYSM', air: 'WIND DRAGON' };
+export const ULT_NAMES = { fire: 'INFERNO ASCENSION', earth: 'CONTINENTAL RIFT', water: 'GLACIAL CATACLYSM', air: 'WIND DRAGON' };
 export function cinematic(type, color) {
   juice.cine = { name: ULT_NAMES[type] || 'ULTIMATE', color, t: 0 };
   slowmo(36, 0.3);

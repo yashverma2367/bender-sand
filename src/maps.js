@@ -389,7 +389,7 @@ export const MAPS = [
           const i = Y * grid.w + X;
           if (grid.type[i] === 0) { if (Math.random() < 0.5) grid.set(X, Y, EL.FIRE); } else grid.temp[i] += 500;
         }
-        for (const p of env.players || []) if (!p.dead && Math.abs(p.x + 1.5 - x) < 6 && p.y + 12 >= y - 30) p.damage(25);
+        for (const p of env.players || []) if (!p.dead && Math.abs(p.x + 2.5 - x) < 7 && p.y + 18 >= y - 30) p.damage(25);
         if (env.fx) { env.fx.flash(4); env.fx.shake(5); }
         emit('thunder', x);
       };

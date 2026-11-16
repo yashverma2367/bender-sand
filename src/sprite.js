@@ -7,8 +7,11 @@
 // center column. Angles in degrees, 0 = pointing straight down, + = swung forward.
 // "near" limbs are drawn on top in full color, "far" limbs behind and darker.
 
-export const BODY_W = 3; // collision box
-export const BODY_H = 12;
+// Everything is designed at the original 3x12 size and scaled up by S (joint positions are
+// multiplied after solving, so every pose keeps its exact shape).
+export const S = 1.5;
+export const BODY_W = 5; // collision box
+export const BODY_H = 18;
 
 const TORSO = 4, THIGH = 3.2, SHIN = 3.2, UARM = 2.2, FARM = 2.2;
 const AIR_HIP = -6.5;     // hip height for airborne poses
@@ -48,7 +51,7 @@ const RUN_STRIDE = RUN_LEG.map((_, i) => {
   };
   const a = foot(RUN_LEG[i]), b = foot(RUN_LEG[(i + 6) % 12]);
   const planted = a[1] >= b[1] ? i : (i + 6) % 12;
-  return Math.max(0.3, foot(RUN_LEG[planted])[0] - foot(RUN_LEG[(planted + 1) % 12])[0]);
+  return Math.max(0.3, foot(RUN_LEG[planted])[0] - foot(RUN_LEG[(planted + 1) % 12])[0]) * S;
 });
 
 // Idle stances: both feet planted (leg IK), hip height, feet x [near, far].
@@ -153,7 +156,7 @@ function solve(pose, lift = 0, rot = 0) {
   };
   const arms = pose.arms.map(arm);
 
-  const R = (pt) => rotP(pt, rot);
+  const R = (pt) => { const [x, y] = rotP(pt, rot); return [x * S, y * S]; }; // rotate, then scale up
   return {
     hip: R(hip), neck: R(neck), shoulder: R(shoulder), head: R(head), lean: pose.lean, rot,
     legs: legs.map((l) => ({ knee: R(l.knee), foot: R(l.foot), shin: l.shin + rot })),
@@ -163,7 +166,7 @@ function solve(pose, lift = 0, rot = 0) {
 
 // ---------- animation state ----------
 export function createAnim(p) {
-  const n = p.def.rope ? p.def.rope.len : 0;
+  const n = p.def.rope ? Math.round(p.def.rope.len * S) : 0;
   const a = {
     t: 0, phase: 0, land: 0, flip: 0, prevDouble: false, blink: 0, state: 'idle', n,
     rx: new Float32Array(n + 1), ry: new Float32Array(n + 1),
@@ -272,14 +275,14 @@ function pose(a, p) {
 // Body center column / feet row in world cells. Kept fractional so every joint is rounded once,
 // in world space (no jitter between the body and a planted foot).
 function origin(p) {
-  return [p.x + 1.5, p.y + BODY_H - 0.5];
+  return [p.x + BODY_W / 2, p.y + BODY_H - 0.5];
 }
 
 function ropeAnchor(p, a) {
   const from = p.def.rope.from;
   const [bx, by] = from === 'head'
-    ? [a.j.head[0] - 1.5, a.j.head[1]]
-    : [a.j.neck[0] - 1, a.j.neck[1] + (from === 'shoulder' ? 1 : 0)];
+    ? [a.j.head[0] - 2.5, a.j.head[1] - 1]
+    : [a.j.neck[0] - 1.5, a.j.neck[1] + (from === 'shoulder' ? 1.5 : 0)];
   const [ox, oy] = origin(p);
   return [ox + bx * p.facing, oy + by];
 }
@@ -287,7 +290,7 @@ function ropeAnchor(p, a) {
 function updateRope(p, a, submerged) {
   const { rx, ry, rox, roy, n } = a;
   const [ax, ay] = ropeAnchor(p, a);
-  const [wx, wy] = p.grid.windAt(p.x + 1, p.y + 4);
+  const [wx, wy] = p.grid.windAt(p.x + BODY_W / 2, p.y + 6);
   const grav = submerged ? 0.03 : ROPE_GRAVITY;
   rx[0] = ax; ry[0] = ay;
   for (let k = 1; k <= n; k++) {
@@ -330,10 +333,18 @@ export function drawSprite(p, px, pal, flash, white) {
       if (e2 <= dx) { err += dx; y0 += sy; }
     }
   };
+  // 2px-thick limb: a second line next to it, offset toward the back for upright segments and
+  // downward for flatter ones, so it thickens cleanly at any angle.
+  const thick = (p0, p1, c) => {
+    line(p0, p1, c);
+    const dx = p1[0] - p0[0], dy = p1[1] - p0[1];
+    const off = Math.abs(dy) >= Math.abs(dx) ? [-1, 0] : [0, 1];
+    line([p0[0] + off[0], p0[1] + off[1]], [p1[0] + off[0], p1[1] + off[1]], c);
+  };
   // Toe: one pixel off the foot, forward when the shin is upright, pointing down when kicked back.
-  const toe = (l, c) => {
-    const s = l.shin * DEG;
-    P([l.foot[0] + Math.cos(s), Math.min(0, l.foot[1] - Math.sin(s))], c);
+  const toe = (l, c) => { // boot: the foot pixel plus a toe, 2 wide
+    const s = l.shin * DEG, tx = l.foot[0] + Math.cos(s) * 1.5, ty = Math.min(0, l.foot[1] - Math.sin(s));
+    P([tx, ty], c); P([l.foot[0], Math.min(0, l.foot[1])], c);
   };
 
   // Rope (world coords), behind everything.
@@ -347,30 +358,33 @@ export function drawSprite(p, px, pal, flash, white) {
 
   // Far limbs (dark).
   const fa = J.arms[1], fl = J.legs[1];
-  line(J.shoulder, fa.elbow, pal.D); line(fa.elbow, fa.hand, pal.Z);
-  line(J.hip, fl.knee, pal.K); line(fl.knee, fl.foot, pal.K); toe(fl, pal.G);
+  thick(J.shoulder, fa.elbow, pal.D); thick(fa.elbow, fa.hand, pal.Z);
+  thick(J.hip, fl.knee, pal.K); thick(fl.knee, fl.foot, pal.K); toe(fl, pal.G);
 
-  // Torso: 2px thick (second line one cell toward the back), belt at the hip.
+  // Torso: 3px thick (two more lines toward the back), belt at the hip.
   const back = J.rot ? [-Math.cos(J.rot * DEG), -Math.sin(J.rot * DEG)] : [-1, 0];
-  const bk = (pt) => [pt[0] + back[0], pt[1] + back[1]];
+  const bk = (pt, k = 1) => [pt[0] + back[0] * k, pt[1] + back[1] * k];
+  line(bk(J.hip, 2), bk(J.neck, 2), pal.B);
   line(bk(J.hip), bk(J.neck), pal.B);
   line(J.hip, J.neck, pal.B);
-  P(J.hip, pal.T); P(bk(J.hip), pal.T);
-  if (d.robe) {
-    P([J.hip[0], J.hip[1] + 1], pal.B); P([J.hip[0] - 1, J.hip[1] + 1], pal.B);
-    if (a.state === 'run' || a.state === 'leap' || a.state === 'fall') P([J.hip[0] - 2, J.hip[1] + 1], pal.B);
+  P(J.hip, pal.T); P(bk(J.hip), pal.T); P(bk(J.hip, 2), pal.T);
+  if (d.robe) { // robe skirt: two rows below the belt, flaring back when moving fast
+    for (let r = 1; r <= 2; r++) { P([J.hip[0], J.hip[1] + r], pal.B); P([J.hip[0] - 1, J.hip[1] + r], pal.B); }
+    if (a.state === 'run' || a.state === 'leap' || a.state === 'fall') { P([J.hip[0] - 2, J.hip[1] + 1], pal.B); P([J.hip[0] - 3, J.hip[1] + 2], pal.B); }
   }
 
-  // Head: 2x2 block, hair on top, face below. Hood wraps the back; topknot is a bun on top.
+  // Head: 3x3 block. Hair on top and at the back, face at the front with an eye.
+  // Headband: a band across the forehead. Hood wraps the back; topknot is a bun on top.
   const [hx, hy] = J.head;
-  P([hx - 1, hy - 1], pal.H); P([hx, hy - 1], d.headband ? pal.T : pal.H);
-  P([hx - 1, hy], d.hood ? pal.H : pal.S); P([hx, hy], pal.S);
-  if (d.headband) P([hx - 1, hy - 1], pal.T);
-  if (d.hood) P([hx - 2, hy], pal.H);
-  if (d.topknot) P([hx - 1, hy - 2], pal.H);
+  for (let x = -2; x <= 0; x++) P([hx + x, hy - 2], pal.H);   // hair
+  P([hx - 2, hy - 1], pal.H); P([hx - 1, hy - 1], pal.S); P([hx, hy - 1], a.blink ? pal.S : pal.E); // eye row
+  P([hx - 2, hy], d.hood ? pal.H : pal.S); P([hx - 1, hy], pal.S); P([hx, hy], pal.S);
+  if (d.headband) { P([hx - 1, hy - 2], pal.T); P([hx, hy - 2], pal.T); P([hx - 3, hy - 2], pal.T); }
+  if (d.hood) { P([hx - 3, hy - 1], pal.H); P([hx - 3, hy], pal.H); P([hx - 2, hy - 3], pal.H); P([hx - 1, hy - 3], pal.H); }
+  if (d.topknot) P([hx - 1, hy - 3], pal.H);
 
   // Near limbs (full color) on top.
   const na = J.arms[0], nl = J.legs[0];
-  line(J.hip, nl.knee, pal.L); line(nl.knee, nl.foot, pal.L); toe(nl, pal.F);
-  line(J.shoulder, na.elbow, pal.B); line(na.elbow, na.hand, pal.S);
+  thick(J.hip, nl.knee, pal.L); thick(nl.knee, nl.foot, pal.L); toe(nl, pal.F);
+  thick(J.shoulder, na.elbow, pal.B); thick(na.elbow, na.hand, pal.S);
 }

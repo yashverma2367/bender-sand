@@ -5,10 +5,11 @@
 //   2. moves to its bender's preferred range (jumping walls / gaps, avoiding lava, unsticking)
 //   3. dodges incoming fire (chance depends on difficulty)
 //   4. picks a move that fits the situation (range, line of sight, height, HP, ult) and
-//      performs it: taps, charged holds (tracking the target), full-charge lance / clap
+//      performs it: taps, charged holds (tracking the target), full-charge clap
 import { EL, KIND, Kind } from './elements.js';
 import { BODY_W as BW, BODY_H as BH } from './sprite.js';
 import { createInput } from './input.js';
+import { projectiles } from './clash.js';
 
 export const BOT_LEVELS = {
   easy: { name: 'Easy', react: [70, 130], aimErr: 0.45, dodge: 0, holdFrac: 0.5, jumpy: 0.002, aggro: 0.5 },
@@ -17,20 +18,19 @@ export const BOT_LEVELS = {
 };
 
 // Preferred distance band (cells) per bender.
-const RANGE = { fire: [45, 105], water: [35, 95], earth: [18, 70], air: [14, 60] };
+const RANGE = { fire: [45, 105], water: [35, 95], earth: [30, 85], air: [14, 60] };
 // Energy cost to start each move (mirrors abilities.js) so the bot doesn't spam failed casts.
 const COST = {
-  fire: { basic: 20, heavy: 10, special: 22, defense: 10, mobility: 8 },
-  earth: { basic: 18, heavy: 8, special: 15, defense: 20, mobility: 8 },
-  water: { basic: 12, heavy: 8, special: 20, defense: 25, mobility: 8 },
+  fire: { basic: 12, heavy: 10, special: 20, defense: 18, mobility: 8 },
+  earth: { basic: 15, heavy: 8, special: 15, defense: 18, mobility: 8 },
+  water: { basic: 12, heavy: 8, special: 28, defense: 10, mobility: 8 },
   air: { basic: 15, heavy: 8, special: 22, defense: 8, mobility: 8 },
 };
 // Energy drained per tick while holding (mirrors abilities.js).
 const DRAIN = {
-  fire: { heavy: 0.45, defense: 0.25, mobility: 1.0 }, earth: { heavy: 0.4, mobility: 0.8 },
-  water: { heavy: 0.4, mobility: 0.9 }, air: { heavy: 0.45, defense: 0.2, mobility: 0.85 },
+  fire: { heavy: 0.45, mobility: 1.0 }, earth: { heavy: 0.4, mobility: 0.8 },
+  water: { heavy: 0.4, defense: 1.1, mobility: 0.9 }, air: { heavy: 0.45, defense: 0.2, mobility: 0.85 },
 };
-const LANCE = 245, CLAP = 155; // full-charge hold times (+ a few ticks of margin)
 
 const SOLID = new Uint8Array(256);
 for (let t = 0; t < 256; t++) SOLID[t] = KIND[t] === Kind.STATIC || KIND[t] === Kind.POWDER ? 1 : 0;
@@ -92,13 +92,13 @@ export class Bot {
     }
     return false; // the map floor is solid
   }
-  danger(dir) { return this.badColumn(this.p.x + 1 + dir * 5); }
+  danger(dir) { return this.badColumn(this.p.x + BW / 2 + dir * 6); }
   // Is there safe footing within jumping range on the other side of a bad stretch?
   crossable(dir, reach = this.p.type === 'air' ? 70 : 24) {
     const p = this.p;
     let bad = false;
     for (let d = 4; d <= reach; d += 2) {
-      const x = p.x + 1 + dir * d;
+      const x = p.x + BW / 2 + dir * d;
       if (this.badColumn(x)) { bad = true; continue; }
       if (bad) { // first good column after the bad stretch: footing near our height?
         for (let y = p.y; y < p.y + BH + 10; y++) if (this.solidAt(x, y)) return true;
@@ -132,6 +132,13 @@ export class Bot {
       if (t < 0 || t > 14) continue;
       if (Math.hypot(ps.x[i] + vx * t - cx, ps.y[i] + vy * t - cy) < 8) return true;
     }
+    for (const q of projectiles) { // clash-engine shots (fireballs, stones, ice spears)
+      if (!q.alive || q.owner === p.id || (p.team !== null && q.team === p.team)) continue;
+      const dx = cx - q.x, dy = cy - q.y, sp = Math.hypot(q.vx, q.vy);
+      if (Math.abs(dx) > 60 || Math.abs(dy) > 40 || sp < 2) continue;
+      const t = (dx * q.vx + dy * q.vy) / (sp * sp);
+      if (t >= 0 && t < 14 && Math.hypot(q.x + q.vx * t - cx, q.y + q.vy * t - cy) < 10) return true;
+    }
     return false;
   }
 
@@ -163,27 +170,27 @@ export class Bot {
     const charge = (lo, hi) => Math.round(rnd(lo, hi) * L.holdFrac);
     if (t === 'fire') {
       add(dist < 110 ? 9 : 0, 'ultimate');
-      add(dist > 45 && flat && dist > 30 && L.holdFrac >= 0.85 && !near ? 3.5 : 0, 'defense', LANCE);
-      add(dist < 130 && clear ? 6 : 0, 'basic');
+      add(Math.abs(dx) < 50 && Math.abs(dy) < 14 ? 6.5 : 0, 'basic');      // flame stomp: same floor, close
       add(dist < 140 && clear ? 5 : 0, 'heavy', charge(22, 48));
-      add(dist < 80 ? 6 : 0, 'special'); // kick barrage crescents
+      add(dist < 60 ? 4.5 : 0, 'special');                                  // flame wall up close
+      add(dist < 130 ? (q.type === 'water' ? 9 : 4) : 0, 'defense');       // lightning: the answer to water
     } else if (t === 'earth') {
-      add(dist < 120 && flat && p.onGround ? 9 : 0, 'ultimate');
-      add(dist < 140 ? 4.5 : 0, 'defense');
-      add(dist > 12 && dist < 42 && flat ? 6 : 0, 'basic');
+      add(dist < 200 && q.onGround ? 9 : 0, 'ultimate');                    // continental rift under them
+      add(near && q.cast ? 7 : 0, 'defense');                               // rock parry a close-range swing
+      add(dist < 95 && !(q.rootT > 0) ? 6.5 : 0, 'basic');                 // earth grip
+      add(q.rootT > 0 ? 3 : 0, 'special');                                  // held: wall up, then ram them
       add(dist > 25 && dist < 150 && clear ? 5 : 0, 'heavy', charge(30, 58));
       add(near ? 3 : 0, 'special');
     } else if (t === 'water') {
       add(dist < 130 ? 9 : 0, 'ultimate');
-      add(dist < 48 ? 7 : 0, 'basic');                                    // water whip
-      add(p.whipCombo > 0 && dist < 50 ? 25 : 0, 'basic');                // follow-up lash
-      add(dist < 38 ? 8 : 0, 'defense');
+      add(dist < 120 && clear ? 6.5 : 0, 'basic');                         // water bullets
+      add(q.type === 'earth' && dist < 75 ? 8 : dist < 50 && clear ? 4 : 0, 'defense', 60); // erosion jet: the answer to earth
+      add(this.blocked > 0 && dist < 85 ? 7 : 0, 'defense', 60);           // wash away what's in the way
       add(dist > 25 && dist < 150 && clear ? 5.5 : 0, 'heavy', charge(25, 48));
-      add(dist > 12 && dist < 110 && clear ? 6 : 0, 'special'); // bubble trap
-      add(q.bubble && q.bubble.by === p.id ? 20 : 0, 'defense'); // combo: freeze the trapped enemy
+      add(dist < 110 && Math.abs(dy) < 20 ? 6 : 0, 'special');             // tidal wave along the floor
     } else if (t === 'air') {
       add(9, 'ultimate');
-      add(dist < 55 && L.holdFrac >= 0.85 ? 3.5 : 0, 'defense', CLAP);
+      add(dist < 50 ? (q.type === 'earth' ? 8 : 4.5) : 0, 'defense');      // sonic boom: the answer to earth
       add(dist > 18 && dist < 120 && clear ? 5.5 : 0, 'basic');
       add(dist < 115 ? 5 : 0, 'heavy', charge(25, 48));
       add(dist < 100 && flat ? 4.5 : 0, 'special');
@@ -255,9 +262,10 @@ export class Bot {
     if (this.dodgeCd <= 0 && this.threatened(world)) {
       this.dodgeCd = 25;
       if (Math.random() < L.dodge) {
-        if (p.onGround || (p.type === 'air' && !p.usedDouble)) inp.jump = true;
+        if (p.type === 'earth' && this.ready('defense') && Math.random() < 0.6) this.action = { slot: 'defense', ticks: 2, hold: false, aim: [Math.sign(dx) || 1, 0] }; // rock parry
+        else if (p.onGround || (p.type === 'air' && !p.usedDouble)) inp.jump = true;
         else if (this.ready('mobility')) { this.action = { slot: 'mobility', ticks: 14, hold: true, age: 0, aim: [Math.random() < 0.5 ? -1 : 1, -1] }; }
-        else if (p.type === 'earth' && this.ready('special')) this.action = { slot: 'special', ticks: 2, hold: false, aim: [Math.sign(dx) || 1, 0] }; // wall up
+        else if ((p.type === 'earth' || p.type === 'fire') && this.ready('special')) this.action = { slot: 'special', ticks: 2, hold: false, aim: [Math.sign(dx) || 1, 0] }; // wall up
       }
     }
 
@@ -298,7 +306,7 @@ export class Bot {
     if (p.type === 'air' && p.vy > 0.3 && dy < -10) inp.up = true; // glide / climb
     if (Math.random() < L.jumpy && p.onGround) inp.jump = true;
     // Underwater (not a swimmer): swim up.
-    const head = this.cellAt(cx, p.y + 2);
+    const head = this.cellAt(cx, p.y + 3);
     if (head === EL.WATER && !p.def.swimmer) {
       inp.up = true;
       if (p.air < p.def.breath * 0.6) { // drowning (maybe trapped under ice): blast out upward

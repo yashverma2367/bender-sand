@@ -120,6 +120,15 @@
     .bpick { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; }
     .portrait.winner { align-self: center; filter: drop-shadow(0 0 10px var(--c)); }
     @media (max-width: 700px) { .cards4 { grid-template-columns: repeat(2, 1fr); } }
+    .labpanel { width: min(1100px, 96vw); background: #12141b; border: 1px solid #2a2d38; border-radius: 8px; padding: 8px 10px;
+      display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+    .labrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .labtitle { color: #e8b04a; letter-spacing: 0.15em; margin-right: 6px; }
+    .labpanel select { background: #0e1016; color: #c9ccd4; border: 1px solid #2f3340; border-radius: 5px; padding: 3px 5px; font: inherit; }
+    .labpanel .side { border-left: 3px solid var(--c, #555); padding-left: 6px; display: inline-flex; gap: 4px; align-items: center; color: #9aa0ae; }
+    .labpanel .vs { color: #6c7180; } .labpanel .pred { color: #e8b04a; }
+    .labpanel .btn { padding: 4px 9px; font-size: 12px; }
+    .lablog { min-height: 60px; max-height: 120px; overflow: auto; color: #c9ccd4; line-height: 1.5; }
     .pips { display: flex; gap: 2px; margin-top: 3px; align-items: center; }
     .pips span { font-size: 8px; line-height: 10px; width: 11px; text-align: center; border-radius: 2px; color: #3c4150; background: #12141b; }
     .pips span.on { color: #0b0c10; background: #e8b04a; }

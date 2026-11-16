@@ -1,7 +1,7 @@
 // Grid -> pixels. Normal view (with heat glow, fire flicker, wind tint) or heat-map view.
 import { EL, PALETTE, SHADES, IGNITE_T, pack } from './elements.js';
 import { FIELD } from './grid.js';
-import { BENDER_TYPES, BW, MAX_HP } from './benders.js';
+import { BENDER_TYPES, BW, BH, MAX_HP } from './benders.js';
 import { MAX_ENERGY } from './abilities.js';
 import { drawSprite } from './sprite.js';
 import { juice } from './juice.js';
@@ -153,9 +153,9 @@ export function createRenderer(grid, canvas) {
   const tagColors = new Map(); // css color -> packed
   function drawPlayer(p) {
     if (p.dead) return;
-    if (p.y + 12 < 0 && p.color) { // above the top of the map: a pointer in their color at the edge
+    if (p.y + BH < 0 && p.color) { // above the top of the map: a pointer in their color at the edge
       if (!tagColors.has(p.color)) tagColors.set(p.color, pack(p.color));
-      const tc = tagColors.get(p.color), x = Math.round(p.x + 1.5);
+      const tc = tagColors.get(p.color), x = Math.round(p.x + BW / 2);
       for (let r = 0; r < 4; r++) for (let k = -r; k <= r; k++) px(x + k, 1 + r, tc);
       for (let k = -4; k <= 4; k++) px(x + k, 5, DARK);
     }
@@ -218,11 +218,15 @@ export function createRenderer(grid, canvas) {
   const DIGITS = ['111101101101111', '010110010010111', '111001111100111', '111001111001111', '101101111001001',
     '111100111001111', '111100111101111', '111001001001001', '111101111101111', '111101111001111'];
   function drawPopups() {
-    for (const q of juice.popups) {
-      if (!tagColors.has(q.color)) tagColors.set(q.color, pack(q.color));
-      const c = tagColors.get(q.color), fade = Math.min(1, q.life / 15);
+    for (const q of juice.popups) drawDigits(q.x, q.y, q.text, q.color, Math.min(1, q.life / 15));
+  }
+  // Pixel digits centered on x, with a dark outline when fully opaque.
+  function drawDigits(x, y, text, color, fade = 1) {
+    {
+      if (!tagColors.has(color)) tagColors.set(color, pack(color));
+      const c = tagColors.get(color);
       const col = fade < 1 ? blend(BG, c, fade) : c;
-      const s = q.text, x0 = Math.round(q.x - (s.length * 4 - 1) / 2), y0 = Math.round(q.y);
+      const s = text, x0 = Math.round(x - (s.length * 4 - 1) / 2), y0 = Math.round(y);
       for (let k = 0; k < s.length; k++) {
         const d = DIGITS[+s[k]];
         if (!d) continue;
@@ -243,7 +247,7 @@ export function createRenderer(grid, canvas) {
     if (view.w >= w && view.h >= h) return;
     for (const p of list) {
       if (p.dead || !p.color) continue;
-      const cx = p.x + 1.5, cy = p.y + 6;
+      const cx = p.x + BW / 2, cy = p.y + BH / 2;
       if (cx >= view.x && cx < view.x + view.w && cy >= view.y && cy < view.y + view.h) continue;
       if (!tagColors.has(p.color)) tagColors.set(p.color, pack(p.color));
       const tc = tagColors.get(p.color);
@@ -257,12 +261,23 @@ export function createRenderer(grid, canvas) {
     }
   }
 
-  function present(players, particles) {
+  // Clash Lab: each attack's power above it, in its element's color.
+  const EL_COLOR = { fire: '#ff7a2a', water: '#4ea8ff', earth: '#d8b070', air: '#e6f4ff', ice: '#bfefff', lava: '#ff4a1a', lightning: '#f5f07a' };
+  function drawAttackLabels(list) {
+    for (const e of list) {
+      if (e.dead) continue;
+      const color = EL_COLOR[e.el] || '#ffffff';
+      drawDigits(e.x2 !== undefined ? (e.x + e.x2) / 2 : e.x, (e.x2 !== undefined ? Math.min(e.y, e.y2) : e.y) - e.r - 8, String(Math.round(e.pow)), color);
+    }
+  }
+
+  function present(players, particles, labels = null) {
     if (particles) drawParticles(particles);
     const list = players ? (Array.isArray(players) ? players : [players]) : [];
     for (const p of list) drawPlayer(p);
     drawEdgeArrows(list);
     drawPopups();
+    if (labels) drawAttackLabels(labels); // Clash Lab power numbers, on top
     wctx.putImageData(img, 0, 0, view.x, view.y, view.w, view.h);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(worldCanvas, view.x, view.y, view.w, view.h, 0, 0, view.w, view.h);

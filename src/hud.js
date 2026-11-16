@@ -47,6 +47,7 @@ export function createScreens(stage, maps, handlers) {
     box.append(el('h2', 'title', 'BENDER SAND'), el('div', 'sub', 'elemental sand-sim brawler'));
     box.append(button('Local Match', showSetup, 'primary'));
     box.append(button('Training', showTraining));
+    box.append(button('Clash Lab (test attack interactions)', () => { hideMenu(); handlers.onLab(); }));
     box.append(button('Custom (sandbox, all tools)', () => { hideMenu(); handlers.onSandbox(); }));
     box.append(button('Host Online', () => handlers.onHostOnline()));
     box.append(button('Join Online', () => showJoin()));
@@ -297,14 +298,14 @@ export function createScreens(stage, maps, handlers) {
   // ---------- pixel portraits ----------
   // The bender's real sprite (idle, or a cast pose) drawn into a small canvas, scaled up crisp.
   function portrait(type, scale = 6, pose = null) {
-    const W = 16, H = 18, cv = el('canvas', 'portrait');
+    const W = 22, H = 26, cv = el('canvas', 'portrait');
     cv.width = W; cv.height = H; cv.style.width = W * scale + 'px'; cv.style.height = H * scale + 'px';
     const ctx = cv.getContext('2d'), img = ctx.createImageData(W, H), buf = new Uint32Array(img.data.buffer);
     const d = BENDER_TYPES[type], pal = {};
     for (const [k, v] of Object.entries(d.palette)) pal[k] = pack(v);
     const dark = (hex) => { const n = parseInt(hex.slice(1), 16); return pack('#' + [16, 8, 0].map((sh) => Math.round(((n >> sh) & 255) * 0.7).toString(16).padStart(2, '0')).join('')); };
     pal.D = dark(d.palette.B); pal.K = dark(d.palette.L); pal.Z = dark(d.palette.S); pal.G = dark(d.palette.F);
-    const p = { x: 6, y: 3, facing: 1, def: d, vx: 0, vy: 0, onGround: true, aimTilt: 0 };
+    const p = { x: 8, y: 5, facing: 1, def: d, vx: 0, vy: 0, onGround: true, aimTilt: 0 };
     p.anim = createAnim(p);
     if (pose) {
       p.cast = { pose, t: 10 }; p.moveDir = 0; p.windX = 0; p.usedDouble = false; p.grid = null;

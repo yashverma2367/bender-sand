@@ -222,17 +222,18 @@ const RECIPES = {
     noise(p, { dur: 0.15, ft: 'highpass', f: 3000, vol: 0.4 });
     noise(p, { dur: 1.8, f: 600, f2: 50, vol: 0.55, at: 0.05, a: 0.05 });
   },
-  kick: (p) => { noise(p, { dur: 0.16, ft: 'bandpass', f: 600, f2: 2600, q: 0.8, vol: 0.32 }); noise(p, { dur: 0.22, ft: 'bandpass', f: 900, f2: 400, q: 0.6, vol: 0.18, at: 0.03 }); },
-  kick3: (p) => { noise(p, { dur: 0.3, ft: 'bandpass', f: 400, f2: 3000, q: 0.7, vol: 0.4 }); tone(p, { f: 140, f2: 60, dur: 0.2, type: 'sawtooth', vol: 0.12 }); noise(p, { dur: 0.35, ft: 'bandpass', f: 1200, f2: 300, q: 0.5, vol: 0.2, at: 0.05 }); },
-  'water.special': (p) => { tone(p, { f: 260, f2: 620, dur: 0.12, vol: 0.18 }); noise(p, { dur: 0.15, ft: 'bandpass', f: 900, f2: 1600, q: 2, vol: 0.12 }); },
-  trap: (p) => { tone(p, { f: 180, f2: 520, dur: 0.25, vol: 0.22 }); tone(p, { f: 520, f2: 300, dur: 0.3, type: 'triangle', vol: 0.08, at: 0.1 }); noise(p, { dur: 0.3, ft: 'bandpass', f: 700, f2: 300, q: 1.5, vol: 0.2 }); },
-  pop: (p) => { tone(p, { f: 900, f2: 200, dur: 0.07, vol: 0.2 }); noise(p, { dur: 0.25, ft: 'bandpass', f: 1500, f2: 500, q: 0.9, vol: 0.25 }); },
-  combo: (p) => { [880, 1175, 1568].forEach((f, k) => tone(p, { f, dur: 0.18, type: 'square', vol: 0.06, at: k * 0.06 })); },
+  bullet: (p) => { noise(p, { dur: 0.08, ft: 'bandpass', f: 1800, f2: 900, q: 1.5, vol: 0.18 }); tone(p, { f: 500, f2: 900, dur: 0.05, vol: 0.06 }); },
+  'water.special': (p) => { noise(p, { dur: 0.9, ft: 'lowpass', f: 300, f2: 1400, vol: 0.4, a: 0.15 }); noise(p, { dur: 0.6, ft: 'highpass', f: 2500, f2: 4000, vol: 0.12, at: 0.2 }); },
+  wavewash: (p) => noise(p, { dur: 0.5, ft: 'bandpass', f: 600, f2: 300, q: 0.7, vol: 0.15 }),
   orbs: (p) => { tone(p, { f: 330, f2: 660, dur: 0.12, type: 'triangle', vol: 0.07 }); noise(p, { dur: 0.18, ft: 'bandpass', f: 900, f2: 2000, q: 1.2, vol: 0.12 }); },
   ultcine: () => { noise(0, { dur: 0.5, ft: 'bandpass', f: 300, f2: 4000, q: 0.7, vol: 0.35, a: 0.05 }); tone(0, { f: 110, f2: 55, dur: 0.6, type: 'sawtooth', vol: 0.12 }); tone(0, { f: 880, f2: 1760, dur: 0.25, type: 'square', vol: 0.05, at: 0.08 }); },
-  crack: (p) => { noise(p, { dur: 0.05, ft: 'highpass', f: 3500, vol: 0.4 }); noise(p, { dur: 0.22, ft: 'bandpass', f: 1400, f2: 500, q: 1, vol: 0.2, at: 0.02 }); },
-  'water.basic': (p) => noise(p, { dur: 0.15, ft: 'bandpass', f: 700, f2: 2200, q: 1.1, vol: 0.18 }),
-  shatter: (p) => { noise(p, { dur: 0.35, ft: 'highpass', f: 5000, f2: 2500, vol: 0.4 }); [2637, 3136, 3951].forEach((f, k) => tone(p, { f, f2: f * 0.9, dur: 0.25, type: 'triangle', vol: 0.06, at: k * 0.02 })); },
+  clash: (p) => { noise(p, { dur: 0.12, ft: 'bandpass', f: 1800, f2: 600, q: 1, vol: 0.3 }); tone(p, { f: 300, f2: 120, dur: 0.1, type: 'square', vol: 0.08 }); },
+  hiss: (p) => noise(p, { dur: 0.7, ft: 'highpass', f: 3000, f2: 1500, vol: 0.28, a: 0.02 }),
+  sizzle: (p) => { noise(p, { dur: 0.5, ft: 'bandpass', f: 2500, f2: 800, q: 0.8, vol: 0.3 }); tone(p, { f: 90, f2: 50, dur: 0.3, vol: 0.2 }); },
+  splat: (p) => { noise(p, { dur: 0.25, f: 600, f2: 120, vol: 0.35 }); tone(p, { f: 160, f2: 70, dur: 0.12, vol: 0.15 }); },
+  freezeclash: (p) => { noise(p, { dur: 0.4, ft: 'highpass', f: 5000, f2: 2000, vol: 0.3 }); tone(p, { f: 1800, f2: 1200, dur: 0.3, type: 'triangle', vol: 0.07 }); },
+  zap: (p) => { noise(p, { dur: 0.15, ft: 'highpass', f: 4000, vol: 0.35 }); for (let k = 0; k < 4; k++) tone(p, { f: 1500 + k * 400, f2: 200, dur: 0.05, type: 'square', vol: 0.07, at: k * 0.03 }); },
+  whoosh: (p) => noise(p, { dur: 0.35, ft: 'bandpass', f: 400, f2: 2400, q: 0.8, vol: 0.3 }),
   fizzle: (p) => { tone(p, { f: 500, f2: 90, dur: 0.25, type: 'square', vol: 0.08 }); noise(p, { dur: 0.25, ft: 'highpass', f: 4000, f2: 1500, vol: 0.08 }); },
 
   // countdown / UI
@@ -243,17 +244,20 @@ const RECIPES = {
   ultready: (p) => { tone(p, { f: 880, dur: 0.1, type: 'triangle', vol: 0.1 }); tone(p, { f: 1320, dur: 0.18, type: 'triangle', vol: 0.1, at: 0.08 }); },
 
   // ---- fire ----
-  'fire.basic': (p) => { // lightning
+  'fire.defense': (p) => { // lightning
     noise(p, { dur: 0.12, ft: 'highpass', f: 5000, f2: 2000, vol: 0.35 });
     for (let k = 0; k < 6; k++) tone(p, { f: rnd(900, 2400), f2: rnd(80, 300), dur: 0.05, type: 'square', vol: 0.08, at: k * 0.025 });
     noise(p, { dur: 1.1, f: 900, f2: 60, vol: 0.45, at: 0.06, a: 0.02 });
   },
   'fire.heavy.release': (p) => { noise(p, { dur: 0.25, ft: 'bandpass', f: 500, f2: 2500, q: 0.8, vol: 0.3 }); tone(p, { f: 160, f2: 60, dur: 0.2, type: 'sawtooth', vol: 0.12 }); },
-  'fire.defense.release': (p) => { // plasma lance
-    impact(p, 0.7, { tail: 0.6 });
-    tone(p, { f: 1800, f2: 120, dur: 0.7, type: 'sawtooth', vol: 0.22 });
-    tone(p, { f: 900, f2: 60, dur: 0.8, type: 'square', vol: 0.12 });
-    noise(p, { dur: 0.9, ft: 'bandpass', f: 3000, f2: 300, q: 0.7, vol: 0.4 });
+  ram: (p) => { impact(p, 0.5, { crack: 0.4, tail: 0 }); noise(p, { dur: 0.5, ft: 'bandpass', f: 200, f2: 900, q: 0.6, vol: 0.35 }); },
+  stomp: (p) => { // flame stomp: a heavy thud + a rushing roar along the ground
+    impact(p, 0.45, { crack: 0.6, tail: 0 });
+    noise(p, { dur: 0.6, ft: 'bandpass', f: 300, f2: 1200, q: 0.6, vol: 0.3, at: 0.04 });
+  },
+  'fire.special': (p) => { // flame wall roaring up
+    noise(p, { dur: 0.8, ft: 'bandpass', f: 250, f2: 1400, q: 0.5, vol: 0.4, a: 0.05 });
+    tone(p, { f: 70, f2: 110, dur: 0.6, type: 'sawtooth', vol: 0.1, a: 0.05 });
   },
   'fire.mobility': (p) => { noise(p, { dur: 0.35, ft: 'bandpass', f: 400, f2: 1800, q: 0.6, vol: 0.35 }); tone(p, { f: 90, f2: 50, dur: 0.3, type: 'sawtooth', vol: 0.1 }); },
   'fire.ultimate': (p) => { // power-up scream, the explosion comes from boom
@@ -263,13 +267,17 @@ const RECIPES = {
   },
 
   // ---- earth ----
-  'earth.basic': (p) => { // magma surge
-    noise(p, { dur: 0.9, f: 250, f2: 60, vol: 0.5, a: 0.05 });
-    for (let k = 0; k < 5; k++) tone(p, { f: rnd(120, 260), f2: rnd(50, 90), dur: 0.08, vol: 0.12, at: 0.1 + k * 0.09 });
+  'earth.basic': (p) => { // earth grip: ground cracks, a stone hand grinds up
+    impact(p, 0.25, { crack: 0.6, tail: 0 });
+    noise(p, { dur: 0.3, ft: 'bandpass', f: 500, f2: 1400, q: 0.9, vol: 0.3 });
+    tone(p, { f: 70, f2: 110, dur: 0.25, vol: 0.2 });
   },
   'earth.heavy.release': (p) => { noise(p, { dur: 0.3, ft: 'bandpass', f: 250, f2: 900, q: 0.8, vol: 0.3 }); tone(p, { f: 120, f2: 45, dur: 0.25, vol: 0.3 }); },
   'earth.special': (p) => { impact(p, 0.4, { crack: 0.5, tail: 0 }); noise(p, { dur: 0.35, f: 700, f2: 90, vol: 0.35 }); },
-  'earth.defense': (p) => { for (let k = 0; k < 3; k++) { noise(p, { dur: 0.18, f: 900, f2: 120, vol: 0.35, at: k * 0.07 }); tone(p, { f: 110, f2: 45, dur: 0.15, vol: 0.25, at: k * 0.07 }); } },
+  'earth.defense': (p) => { // rock parry: a slab slams up
+    impact(p, 0.2, { crack: 0.7, tail: 0 });
+    tone(p, { f: 160, f2: 90, dur: 0.12, vol: 0.2 });
+  },
   'earth.mobility': (p) => noise(p, { dur: 0.55, ft: 'bandpass', f: 1500, f2: 600, q: 0.5, vol: 0.25, a: 0.05 }),
   'earth.ultimate': (p) => {
     noise(p, { dur: 2.2, f: 200, f2: 40, vol: 0.7, a: 0.15 });
@@ -283,10 +291,6 @@ const RECIPES = {
     tone(p, { f: 3600, f2: 2200, dur: 0.12, type: 'triangle', vol: 0.07 });
     noise(p, { dur: 0.2, ft: 'highpass', f: 2500, f2: 6000, vol: 0.18 });
   },
-  'water.defense': (p) => { // flash freeze
-    noise(p, { dur: 0.5, ft: 'highpass', f: 6000, f2: 2500, vol: 0.3 });
-    [1568, 2093, 2637].forEach((f, k) => tone(p, { f, f2: f * 0.98, dur: 0.6, type: 'triangle', vol: 0.06, at: k * 0.04 }));
-  },
   'water.mobility': (p) => noise(p, { dur: 0.4, ft: 'bandpass', f: 1200, f2: 300, q: 0.9, vol: 0.35 }),
   'water.ultimate': (p) => {
     noise(p, { dur: 2.4, ft: 'bandpass', f: 200, f2: 1600, q: 0.4, vol: 0.55, a: 0.6 });
@@ -294,10 +298,11 @@ const RECIPES = {
   },
 
   // ---- air ----
-  'air.basic': (p) => noise(p, { dur: 0.5, ft: 'bandpass', f: 3000, f2: 200, q: 1.5, vol: 0.35, a: 0.15 }), // vacuum (reverse whoosh)
+  'air.basic': (p) => { noise(p, { dur: 0.18, ft: 'bandpass', f: 2500, f2: 700, q: 1.2, vol: 0.3 }); noise(p, { dur: 0.05, ft: 'highpass', f: 5000, vol: 0.15 }); }, // wind blade: a sharp swish
+  'air.defense': (p) => noise(p, { dur: 0.28, ft: 'bandpass', f: 300, f2: 2600, q: 1.2, vol: 0.3, a: 0.2 }), // sonic boom wind-up (rising rush)
   'air.heavy.release': (p) => { impact(p, 0.35, { tail: 0 }); noise(p, { dur: 0.25, f: 1200, f2: 100, vol: 0.3 }); },
   'air.special': (p) => noise(p, { dur: 1.0, ft: 'bandpass', f: 400, f2: 1600, q: 2, vol: 0.35, a: 0.1 }),
-  'air.defense.release': (p) => { // sonic clap
+  'air.defense.release': (p) => { // sonic boom
     impact(p, 0.8, { crack: 1.4, tail: 0.5 });
     noise(p, { dur: 0.06, ft: 'highpass', f: 2000, vol: 0.6 });
     tone(p, { f: 160, f2: 30, dur: 0.6, vol: 0.55 });
@@ -324,9 +329,9 @@ export const activeLoops = () => [...loops.keys()];
 // spec: noise or oscillator source, filter / pitch moving with charge progress (0..1).
 const LOOPS = {
   'fire.heavy': { osc: 'square', f: [80, 260], ft: 'lowpass', ff: [400, 1400], vol: 0.07 },
-  'fire.defense': { osc: 'sawtooth', f: [70, 520], ft: 'lowpass', ff: [300, 3000], vol: 0.09, trem: 9 },
   'earth.heavy': { noise: true, ft: 'lowpass', ff: [160, 320], vol: 0.35, trem: 7 },
   'water.heavy': { osc: 'triangle', f: [500, 1300], vol: 0.06 },
+  'water.defense': { noise: true, ft: 'bandpass', ff: [2600, 2600], q: 1, vol: 0.28, trem: 30 }, // erosion jet hiss
   'air.heavy': { noise: true, ft: 'bandpass', ff: [300, 1500], q: 2, vol: 0.25 },
   'fire.mobility': { noise: true, ft: 'bandpass', ff: [550, 550], q: 0.6, vol: 0.28, trem: 15 },
   'water.mobility': { noise: true, ft: 'bandpass', ff: [1900, 1900], q: 1.1, vol: 0.2 },

@@ -21,6 +21,8 @@ import { createTouchControls, isTouchDevice } from './touch.js';
 import { HostSession, GuestSession } from './online.js';
 import { applySnapshot } from './net.js';
 import { onlineConfigured } from './signal.js';
+import { stepProjectiles, resolveClashes, clearClash, lastEntries } from './clash.js';
+import { createLab } from './lab.js';
 import { Bot } from './bot.js';
 
 // World: wide enough for 3-4 benders, always shown in full.
@@ -84,7 +86,7 @@ function updateCamera() {
   if (!camMode) return;
   const p = camPlayer();
   if (p && !p.dead) {
-    const tx = p.x + 1.5 - view.w / 2, ty = p.y + 6 - view.h * 0.4; // you sit a bit above center, clear of the thumbs
+    const tx = p.x + 2.5 - view.w / 2, ty = p.y + 9 - view.h * 0.4; // you sit a bit above center, clear of the thumbs
     if (camSnap) { camX = tx; camY = ty; camSnap = false; }
     camX += (tx - camX) * 0.12; camY += (ty - camY) * 0.12;
   }
@@ -137,7 +139,7 @@ function useMap(m) {
 }
 
 function startSandbox() {
-  resetJuice();
+  resetJuice(); clearClash();
   state.mode = 'sandbox'; state.paused = false;
   match = null;
   sandboxPlayer.team = null;
@@ -148,7 +150,7 @@ function startSandbox() {
 }
 
 function startMatch(cfg, slots) {
-  resetJuice(); matchOverSeen = false;
+  resetJuice(); clearClash(); matchOverSeen = false;
   lastMatch = { cfg, slots };
   state.mode = 'match'; state.paused = false; resultsShown = false;
   match = new Match(world, cfg, slots);
@@ -163,7 +165,7 @@ function startMatch(cfg, slots) {
 }
 
 function toMenu() {
-  resetJuice();
+  resetJuice(); clearClash(); if (lab) lab.stop();
   state.mode = 'menu'; state.paused = false;
   match = null;
   setPlayers([]);
@@ -190,6 +192,7 @@ function updateTouch() { // on-screen controls only while actually playing
   if (tp) touch.setBender(tp.type);
 }
 
+const lab = createLab({ world, getMatch: () => match });
 const screens = createScreens(stage, MAPS, {
   onSandbox: startSandbox,
   onStartMatch: startMatch,
@@ -201,6 +204,11 @@ const screens = createScreens(stage, MAPS, {
   },
   onQuit: toMenu,
   onHostOnline: hostOnline,
+  onLab: () => {
+    startMatch({ format: 'duel', win: 'training', map: MAPS[0], training: true, infinite: true, lab: true },
+      [{ name: 'You', type: lab.me, source: 'local', team: 0 }, { name: 'Dummy', type: 'water', source: 'cpu-dummy', team: 1 }]);
+    lab.start();
+  },
   onStartTraining: (t) => startMatch(
     { format: 'duel', win: 'training', map: MAPS.find((m) => m.id === t.map) || MAPS[0], training: true, infinite: t.infinite },
     [{ name: 'You', type: t.type, source: 'local', team: 0 }, { name: 'Dummy', type: t.dummy, source: 'cpu-' + t.mode, team: 1 }]),
@@ -415,7 +423,7 @@ function hose(p, inp) {
   if (t === 0 || t === WIND_TOOL) t = EL.SAND;
   const aim = inp.up ? -1.6 : inp.down ? 0.6 : -0.6;
   for (let k = 0; k < 2; k++) {
-    particles.spawn(p.x + 1.5 + p.facing * 2, p.y + 4, p.facing * (2.6 + Math.random() * 0.8) + p.vx, aim + (Math.random() - 0.5) * 0.6,
+    particles.spawn(p.x + 2.5 + p.facing * 3, p.y + 6, p.facing * (2.6 + Math.random() * 0.8) + p.vx, aim + (Math.random() - 0.5) * 0.6,
       t, { bounces: KIND[t] === Kind.POWDER || KIND[t] === Kind.STATIC ? 2 : 0 });
   }
 }
@@ -434,6 +442,9 @@ function tick() {
     updateAbilities(p, inp, world);
     particles.defaultOwner = 0; // particles spawned outside a bender's moves belong to nobody
   }
+  lab.tick();               // Clash Lab emitters (when open)
+  stepProjectiles(world);   // clash-engine projectiles (fireballs, stones, ice spears ...)
+  resolveClashes(world);    // attacks that touched this tick react with each other
   if (match && match.cfg.training) trainingTick(match);
   if (match && match.over && !match.result) victoryTick(match);
   if (match && match.over && !matchOverSeen) { matchOverSeen = true; slowmo(90, 0.3); } // the final KO in slow motion
@@ -470,7 +481,7 @@ function victoryTick(m) {
   m.t % 2 === 0 && res.winner.players.forEach((p) => {
     if (p.dead) return;
     p.cast = { pose: 'powerup', t: 4 }; p.invulnT = Math.max(p.invulnT || 0, 4); p.stunT = Math.max(p.stunT || 0, 2);
-    const cx = p.x + 1.5, cy = p.y + 6, a = m.t * 0.25;
+    const cx = p.x + 2.5, cy = p.y + 9, a = m.t * 0.25;
     for (let k = 0; k < 3; k++) {
       const r = Math.random();
       if (p.type === 'fire') particles.spawn(cx + (r - 0.5) * 6, cy + 6, (r - 0.5) * 0.8, -2.5 - Math.random() * 1.5, EL.FIRE, { ghost: true, gravity: 0.04, life: 30 });
@@ -538,7 +549,7 @@ function frame(now) {
   updateCamera();
   renderer.draw(state.heatView);
   if (tools() && mouse.inside) renderer.drawBrush(mouse.x, mouse.y, state.brush);
-  renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles);
+  renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles, lab.active ? lastEntries : null);
   // Brightness: flashes brighten, an ultimate cinematic darkens the world for a moment.
   const cineDim = juice.cine ? Math.max(0.5, 1 - 0.5 * Math.min(1, juice.cine.t / 6, (60 - juice.cine.t) / 15)) : 1;
   if (state.mode === 'guest' && juice.cine && ++juice.cine.t > 70) juice.cine = null; // guests age it here
@@ -571,5 +582,5 @@ requestAnimationFrame(frame);
 
 // Test hook: ?debug exposes the internals to the console.
 if (new URLSearchParams(window.location.search).has('debug')) {
-  window.__bs = { musicState, juice, Bot, sfx, state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
+  window.__bs = { startMatch, MAPS, musicState, juice, Bot, sfx, state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
 }

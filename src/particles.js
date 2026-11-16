@@ -5,6 +5,7 @@
 // conserved: lifting cells out of the grid and throwing them never creates or destroys material.
 //
 // Storage is struct-of-arrays with swap-remove, so thousands of particles stay cheap.
+import { BODY_W as BW, BODY_H as BH } from './sprite.js';
 import { Kind, KIND, WIND, R_CHANCE, R_SELF, R_OTHER, SHADES, AMBIENT, SPAWN_T, EL, IGNITE_T } from './elements.js';
 
 const DEFAULT_MAX = 8192;
@@ -142,7 +143,7 @@ export class Particles {
       let x = ex, y = ey, inside = false;
       for (let s = 1; s <= steps && !inside; s++) {
         x = ox + ((ex - ox) * s) / steps; y = oy + ((ey - oy) * s) / steps;
-        inside = x >= b.x - 0.5 - pad && x <= b.x + 3.5 + pad && y >= b.y - pad && y <= b.y + 12 + pad;
+        inside = x >= b.x - 0.5 - pad && x <= b.x + BW + 0.5 + pad && y >= b.y - pad && y <= b.y + BH + pad;
       }
       if (!inside) continue;
       // Damage: faster = harder, scaled per particle; capped per body per tick so a cloud of
@@ -156,7 +157,7 @@ export class Particles {
         if (this.onHit && applied) this.onHit(this.owner[i] - 1, b, applied);
       }
       // Proximity fuse: the blast goes off between the shot and the body, so near misses land.
-      const bx = b.x + 1.5, by = b.y + 6;
+      const bx = b.x + BW / 2, by = b.y + BH / 2;
       if (this.detonate(i, x + (bx - x) * 0.6, y + (by - y) * 0.6)) return true;
       if (this.dmg[i] >= 1) return true; // a real shot breaks up on the body (no ice / rubble wall around them)
       this.settle(i, Math.floor(x - vx / Math.sqrt(sp2) * 2), Math.floor(y));
