@@ -4,7 +4,7 @@
 //   rooms/<CODE>/joins/<id>/answer            written by the host
 // Joiners create the WebRTC offer, the host answers. ICE candidates are gathered up front
 // (non-trickle), so each side writes exactly one message.
-import { dbUrl, ICE_SERVERS } from './net-config.js';
+import { dbUrl, ICE_SERVERS, TURN_SERVERS } from './net-config.js';
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I / O
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -20,7 +20,7 @@ async function rest(path, method = 'GET', body) {
 export const onlineConfigured = () => !!dbUrl();
 
 export function newPeerConnection() {
-  return new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  return new RTCPeerConnection({ iceServers: [...ICE_SERVERS, ...TURN_SERVERS] });
 }
 
 // Resolve once ICE gathering is complete (or after `ms`, using whatever was found).
@@ -80,8 +80,10 @@ export async function hostRoom(onPeer) {
 
 // ---------- joiner ----------
 // Returns { pc, ctl, snap } once both data channels are open. Throws a readable Error otherwise.
-export async function joinRoom(code, name) {
+// status(text): progress for the join screen.
+export async function joinRoom(code, name, status = () => {}) {
   code = code.trim().toUpperCase();
+  status('finding room...');
   const room = await rest(`rooms/${code}`);
   if (!room) throw new Error(`No room "${code}"`);
   if (!room.open) throw new Error('That match has already started');
@@ -94,17 +96,23 @@ export async function joinRoom(code, name) {
   await gathered(pc);
 
   const id = Math.random().toString(36).slice(2, 10);
+  status('waiting for the host to answer...');
   await rest(`rooms/${code}/joins/${id}`, 'PUT', { name, offer: pc.localDescription.sdp });
 
   let answer = null;
   for (let t = 0; t < 40 && !answer; t++) { await sleep(750); answer = await rest(`rooms/${code}/joins/${id}/answer`); }
-  if (!answer) { pc.close(); rest(`rooms/${code}/joins/${id}`, 'DELETE').catch(() => {}); throw new Error('Host did not answer'); }
+  if (!answer) { pc.close(); rest(`rooms/${code}/joins/${id}`, 'DELETE').catch(() => {}); throw new Error('The host did not answer (is their game still open on the lobby?)'); }
+  status(TURN_SERVERS.length ? 'connecting (direct or via relay)...' : 'connecting directly to the host...');
   await pc.setRemoteDescription({ type: 'answer', sdp: answer });
 
+  const blocked = TURN_SERVERS.length
+    ? 'Could not connect to the host, even through the relay. Check the TURN settings in src/net-config.js.'
+    : 'Your network blocks direct connections to the host. A TURN relay is needed (see ONLINE.md), or try both players on the same Wi-Fi.';
   const open = (ch) => new Promise((resolve, reject) => {
     if (ch.readyState === 'open') return resolve();
     ch.onopen = () => resolve();
-    setTimeout(() => reject(new Error('Could not connect to the host (network blocked peer-to-peer)')), 15000);
+    pc.addEventListener('iceconnectionstatechange', () => { if (pc.iceConnectionState === 'failed') reject(new Error(blocked)); });
+    setTimeout(() => reject(new Error(blocked)), 15000);
   });
   try { await Promise.all([open(ctl), open(snap)]); }
   finally { rest(`rooms/${code}/joins/${id}`, 'DELETE').catch(() => {}); }

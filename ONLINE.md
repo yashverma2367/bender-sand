@@ -44,9 +44,21 @@ The URL is public client config, not a password. The rules above are what protec
 - Friends: **Join Online** → type the code, name, bender → **Join**.
 - **Tools → Custom** gives the host every painting tool during the online match.
 
+## 4. Relay for blocked networks (TURN)
+
+If joining fails with "Your network blocks direct connections", the two browsers can't reach each
+other directly (mobile data, strict routers, school / office Wi-Fi). A TURN relay fixes it:
+
+1. Sign up for a TURN provider with a free tier (for example https://www.metered.ca , "TURN Server").
+2. Create a credential and copy the ICE server list it shows (entries with `urls`, `username`, `credential`).
+3. Paste those entries into `TURN_SERVERS` in `src/net-config.js`, then push.
+
+The relay is only used when a direct connection fails. Its username / password end up in the page
+source (that's how browser TURN works), so anyone could use your free relay allowance; rotate the
+credential in the provider's dashboard if that ever happens.
+
 ## Known limits
 
-- No TURN relay server: on some strict networks (some mobile carriers, school/office Wi-Fi)
-  browsers can't reach each other directly, and joining fails with "Could not connect to the host".
+- Without a TURN relay (step 4), some networks can't connect at all.
 - The host's upload carries everyone: about 50 KB/s per guest.
 - Needs a recent browser (Safari 16.4+ / iOS 16.4+, Chrome, Firefox, Edge).

@@ -197,7 +197,7 @@ export function createScreens(stage, maps, handlers) {
     const go = button('Join', async () => {
       if (online.code.length !== 4) { st.textContent = 'enter the 4-letter room code'; return; }
       st.style.color = '#9aa0ae'; st.textContent = 'connecting...';
-      try { await handlers.onJoinOnline(online.code, online.name || 'Guest', online.type); }
+      try { await handlers.onJoinOnline(online.code, online.name || 'Guest', online.type, (t) => { st.textContent = t; }); }
       catch (e) { st.style.color = ''; st.textContent = e.message || String(e); }
     }, 'primary');
     const actions = el('div', 'actions'); actions.append(button('Back', showMain), go);

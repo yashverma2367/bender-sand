@@ -4,11 +4,17 @@
 // (This is public client config, not a secret. Lock it down with the rules in ONLINE.md.)
 export const FIREBASE_DB_URL = 'https://bender-sand-default-rtdb.asia-southeast1.firebasedatabase.app';
 
-// Free public STUN servers so browsers can find a route to each other.
+// Free public STUN servers so browsers can find a direct route to each other.
 export const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
 ];
+
+// TURN relay: used only when a direct connection is blocked (mobile data, strict routers,
+// school / office Wi-Fi). Paste the entries your TURN provider gives you (see ONLINE.md), e.g.
+//   { urls: 'turn:global.relay.metered.ca:80', username: '...', credential: '...' },
+export const TURN_SERVERS = [];
 
 // `?db=<url>` overrides the database (used for local testing).
 export function dbUrl() {

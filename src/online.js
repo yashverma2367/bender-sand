@@ -185,8 +185,8 @@ export class GuestSession {
   // hooks: { onLobby(lobby, you, inMatch), onStart(cfg), onSnapshot(bytes), onResults(r), onLobbyBack(), onClosed(why) }
   constructor(hooks) { this.hooks = hooks; this.jumps = 0; this.lastBits = -1; this.lastSent = 0; this.chain = Promise.resolve(); }
 
-  async join(code, name, type) {
-    const { pc, ctl, snap } = await joinRoom(code, name);
+  async join(code, name, type, status) {
+    const { pc, ctl, snap } = await joinRoom(code, name, status);
     this.pc = pc; this.ctl = ctl; this.snap = snap;
     ctl.onmessage = (m) => this.onMessage(JSON.parse(m.data));
     snap.onmessage = (m) => { this.chain = this.chain.then(() => unpack(m.data)).then((b) => this.hooks.onSnapshot(b)).catch(console.warn); };

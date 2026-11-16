@@ -238,9 +238,30 @@ export function createRenderer(grid, canvas) {
     }
   }
 
+  // Zoomed camera: a small arrow at the screen edge pointing at each player outside the view.
+  function drawEdgeArrows(list) {
+    if (view.w >= w && view.h >= h) return;
+    for (const p of list) {
+      if (p.dead || !p.color) continue;
+      const cx = p.x + 1.5, cy = p.y + 6;
+      if (cx >= view.x && cx < view.x + view.w && cy >= view.y && cy < view.y + view.h) continue;
+      if (!tagColors.has(p.color)) tagColors.set(p.color, pack(p.color));
+      const tc = tagColors.get(p.color);
+      const vx0 = view.x + 4, vx1 = view.x + view.w - 5, vy0 = view.y + 4, vy1 = view.y + view.h - 5;
+      const ax = Math.max(vx0, Math.min(vx1, cx)), ay = Math.max(vy0, Math.min(vy1, cy));
+      const dx = Math.sign(cx - ax), dy = Math.sign(cy - ay);
+      for (let r = 0; r < 4; r++) for (let k = -r; k <= r; k++) { // triangle pointing out of the screen
+        const X = Math.round(ax + (dx ? dx * (r - 3) : k)), Y = Math.round(ay + (dy ? dy * (r - 3) : (dx ? k : 0)));
+        px(X, Y, tc);
+      }
+    }
+  }
+
   function present(players, particles) {
     if (particles) drawParticles(particles);
-    if (players) for (const p of Array.isArray(players) ? players : [players]) drawPlayer(p);
+    const list = players ? (Array.isArray(players) ? players : [players]) : [];
+    for (const p of list) drawPlayer(p);
+    drawEdgeArrows(list);
     drawPopups();
     wctx.putImageData(img, 0, 0, view.x, view.y, view.w, view.h);
     ctx.imageSmoothingEnabled = false;

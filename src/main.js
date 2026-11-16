@@ -73,7 +73,44 @@ const onlineCustom = () => state.mode === 'match' && !!net && !!match && !!match
 const view = { x: 0, y: 0, w: W, h: H };
 renderer.setView(view);
 canvas.style.aspectRatio = `${W} / ${H}`;
+// Phones / tablets: a zoomed camera that follows your bender (desktop always shows the whole map).
+const CAM_PX = 2.6;         // screen pixels per cell on touch screens (bigger screens see more)
+let camMode = false, camX = 0, camY = 0, camSnap = true;
+function camPlayer() {
+  if (state.mode === 'guest') return guestView.players[guestView.you];
+  return world.players.find((p) => p.source === 'touch' || p.source === 'local') || world.players[0];
+}
+function updateCamera() {
+  if (!camMode) return;
+  const p = camPlayer();
+  if (p && !p.dead) {
+    const tx = p.x + 1.5 - view.w / 2, ty = p.y + 6 - view.h * 0.4; // you sit a bit above center, clear of the thumbs
+    if (camSnap) { camX = tx; camY = ty; camSnap = false; }
+    camX += (tx - camX) * 0.12; camY += (ty - camY) * 0.12;
+  }
+  camX = Math.max(0, Math.min(W - view.w, camX)); camY = Math.max(0, Math.min(H - view.h, camY));
+  view.x = Math.round(camX); view.y = Math.round(camY);
+}
+
 function layout() { // the canvas gets more room when the sandbox toolbar is hidden
+  const playingNow = state.mode === 'match' || state.mode === 'guest';
+  const cam = isTouchDevice && playingNow;
+  if (cam !== camMode) camSnap = true;
+  camMode = cam;
+  document.body.classList.toggle('cam', cam);
+  if (cam) { // full screen, zoomed in, following the player
+    const sw = window.innerWidth, sh = window.innerHeight;
+    view.h = Math.min(H, Math.max(120, Math.round(sh / CAM_PX))); view.w = Math.min(W, Math.round(view.h * sw / sh));
+    renderer.setView(view);
+    canvas.style.aspectRatio = 'auto';
+    stage.style.width = '';
+    toolbarEl.style.display = statsEl.style.display = helpEl.style.display = 'none';
+    document.body.classList.add('playing');
+    return;
+  }
+  view.x = 0; view.y = 0; view.w = W; view.h = H;
+  renderer.setView(view);
+  canvas.style.aspectRatio = `${W} / ${H}`;
   const sandbox = state.mode === 'sandbox' || onlineCustom();
   const reserve = sandbox ? 290 : isTouchDevice ? 16 : 70;
   stage.style.width = `min(calc(100vw - ${isTouchDevice ? 8 : 32}px), calc((100vh - ${reserve}px) * ${(W / H).toFixed(3)}))`;
@@ -226,7 +263,7 @@ function showGuestLobby(status = '') {
   });
 }
 
-async function joinOnline(code, name, type) {
+async function joinOnline(code, name, type, status) {
   if (!onlineConfigured()) throw new Error('Online is not set up yet (see ONLINE.md)');
   if (guest) guest.leave();
   const g = new GuestSession({
@@ -254,7 +291,7 @@ async function joinOnline(code, name, type) {
     onLobbyBack: () => { toMenu(); showGuestLobby(); },
     onClosed: (why) => { if (guest) guest.leave(); guest = null; toMenu(); screens.showOnlineMessage('DISCONNECTED', why); },
   });
-  await g.join(code, name, type);
+  await g.join(code, name, type, status);
   guest = g;
   if (guestView.lobby) showGuestLobby(); else screens.showOnlineMessage('CONNECTED', 'waiting for the lobby...');
 }
@@ -498,6 +535,7 @@ function frame(now) {
   if (host) stepJuice();
 
   sounds();
+  updateCamera();
   renderer.draw(state.heatView);
   if (tools() && mouse.inside) renderer.drawBrush(mouse.x, mouse.y, state.brush);
   renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles);
@@ -526,6 +564,7 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+window.addEventListener('resize', layout);
 toMenu();
 screens.showMain();
 requestAnimationFrame(frame);

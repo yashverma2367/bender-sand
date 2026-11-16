@@ -130,24 +130,34 @@
     .banner { position: absolute; top: 40%; left: 0; right: 0; text-align: center; font-size: 46px; font-weight: bold;
       color: #e8b04a; letter-spacing: 0.15em; text-shadow: 0 3px 8px #000; }
 
+    /* ---- touch: full-screen zoomed camera while playing ---- */
+    body.cam { padding: 0; }
+    body.cam h1 { display: none; }
+    body.cam #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    body.cam #game { width: 100% !important; height: 100%; border: 0; }
+    body.cam .cards { left: max(6px, env(safe-area-inset-left)); right: max(6px, env(safe-area-inset-right)); }
+    body.cam .card { flex: 0 1 22%; width: auto; min-width: 0; opacity: 0.85; font-size: 9px; padding: 2px 5px; }
+    body.cam .clock { top: 6px; font-size: 11px; }
+    body.cam .feed { top: 44px; font-size: 9px; }
+
     /* ---- touch controls ---- */
     .touch { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 6; user-select: none; -webkit-user-select: none; }
     .touch * { touch-action: none; -webkit-tap-highlight-color: transparent; }
-    .stick { position: absolute; left: max(18px, env(safe-area-inset-left)); bottom: 22px; width: 128px; height: 128px; border-radius: 50%;
-      background: rgba(255, 255, 255, 0.06); border: 2px solid rgba(255, 255, 255, 0.18); pointer-events: auto; }
-    .knob { position: absolute; left: 39px; top: 39px; width: 50px; height: 50px; border-radius: 50%; background: rgba(232, 176, 74, 0.45);
-      border: 2px solid rgba(232, 176, 74, 0.8); }
-    .tbtns { position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: 14px; display: grid;
-      grid-template-columns: 58px 58px 76px; grid-template-rows: repeat(3, 48px); gap: 6px; pointer-events: auto; }
-    .tb { border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.2); background: rgba(20, 22, 30, 0.38); color: #e8e2d0;
+    .stick { position: absolute; left: max(14px, env(safe-area-inset-left)); bottom: 14px; width: 116px; height: 116px; border-radius: 50%;
+      background: rgba(255, 255, 255, 0.04); border: 2px solid rgba(255, 255, 255, 0.14); pointer-events: auto; }
+    .knob { position: absolute; left: 34px; top: 34px; width: 44px; height: 44px; border-radius: 50%; background: rgba(232, 176, 74, 0.35);
+      border: 2px solid rgba(232, 176, 74, 0.7); }
+    .tbtns { position: absolute; right: max(10px, env(safe-area-inset-right)); bottom: 10px; display: grid;
+      grid-template-columns: 54px 54px 70px; grid-template-rows: repeat(3, 44px); gap: 5px; pointer-events: auto; }
+    .tb { border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.16); background: rgba(20, 22, 30, 0.22); color: #e8e2d0;
       font: 10px ui-monospace, monospace; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 0;
       text-shadow: 0 1px 2px #000; }
     .tb b { font-size: 10px; } .tb i { font-style: normal; color: #9aa0b0; font-size: 9px; }
     .tb.down { background: rgba(232, 176, 74, 0.45); border-color: #e8b04a; }
     .tb-ult { border-color: rgba(192, 112, 255, 0.6); }
-    .tb-jump { grid-column: 3; grid-row: 2 / span 2; width: 76px; height: 76px; align-self: center; border-radius: 50%;
+    .tb-jump { grid-column: 3; grid-row: 2 / span 2; width: 70px; height: 70px; align-self: center; border-radius: 50%;
       background: rgba(78, 168, 255, 0.22); border-color: rgba(78, 168, 255, 0.7); }
-    .tpause { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); width: 48px; height: 32px; border-radius: 8px;
+    .tpause { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); width: 44px; height: 28px; border-radius: 8px;
       background: rgba(20, 22, 30, 0.6); border: 1px solid #3a3f4e; color: #c9ccd4; pointer-events: auto; font-size: 12px; }
     /* tablets: bigger thumbs targets */
     @media (min-width: 1000px) and (min-height: 600px) {
