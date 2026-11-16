@@ -11,6 +11,7 @@ export const INPUT_SOURCES = {
   kb2: 'Keyboard 2 (I J K L + U O P H N M)',
   pad0: 'Gamepad 1', pad1: 'Gamepad 2', pad2: 'Gamepad 3', pad3: 'Gamepad 4',
   touch: 'Touch screen',
+  'cpu-easy': 'CPU · Easy', 'cpu-normal': 'CPU · Normal', 'cpu-hard': 'CPU · Hard',
 };
 
 // key = KeyboardEvent.key lowercased

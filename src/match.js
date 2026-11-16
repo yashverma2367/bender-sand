@@ -13,6 +13,7 @@ export const WINS = {
   kos: { name: 'First to 10 KOs', target: 10 },
   timed: { name: 'Timed (3 min)', seconds: 180 },
   lives: { name: '3 Lives', lives: 3 },
+  training: { name: 'Training', training: true, hidden: true }, // no win condition (Training mode)
 };
 
 export const PLAYER_COLORS = ['#ff5a4e', '#4ea8ff', '#5adc6e', '#ffd24e'];
@@ -138,7 +139,7 @@ export class Match {
   }
 
   checkWin() {
-    if (this.over) return;
+    if (this.over || this.win.training) return;
     const sides = this.sides();
     if (this.win.target && sides.some((s) => s.kos >= this.win.target)) this.finish();
     if (this.win.lives && sides.filter((s) => s.alive).length <= 1) this.finish();
@@ -161,6 +162,7 @@ export class Match {
 
   // Clock text for the HUD.
   clockText() {
+    if (this.win.training) return `Training · combo ${Math.round(this.combo || 0)} · best ${Math.round(this.best || 0)}`;
     if (this.win.seconds) {
       const s = Math.ceil(this.timeLeft / 60);
       return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;

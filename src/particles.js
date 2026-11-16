@@ -132,12 +132,17 @@ export class Particles {
     const vx = this.vx[i], vy = this.vy[i], sp2 = vx * vx + vy * vy;
     if (sp2 < 6.25) return false; // slower than 2.5 cells/tick: harmless
     const ex = this.x[i], ey = this.y[i], steps = Math.max(1, Math.ceil(Math.hypot(ex - ox, ey - oy)));
+    // Hit margin around the body: explosive shots have a proximity fuse (they go off when they
+    // pass near someone), other solid shots get a little forgiveness.
+    const boom = this.boom[i], pad = boom > 0 ? 5 + boom * 0.6 : 1.5;
+    const owner = bodies.find((q) => q.id + 1 === this.owner[i]);
     for (const b of bodies) {
       if (b.dead || b.id + 1 === this.owner[i]) continue;
+      if (owner && owner.team !== null && b.team === owner.team) continue; // teammates: fly past
       let x = ex, y = ey, inside = false;
       for (let s = 1; s <= steps && !inside; s++) {
         x = ox + ((ex - ox) * s) / steps; y = oy + ((ey - oy) * s) / steps;
-        inside = x >= b.x - 0.5 && x <= b.x + 3.5 && y >= b.y && y <= b.y + 12;
+        inside = x >= b.x - 0.5 - pad && x <= b.x + 3.5 + pad && y >= b.y - pad && y <= b.y + 12 + pad;
       }
       if (!inside) continue;
       // Damage: faster = harder, scaled per particle; capped per body per tick so a cloud of
@@ -150,7 +155,10 @@ export class Particles {
         const applied = b.damage(dealt, this.owner[i] - 1);
         if (this.onHit && applied) this.onHit(this.owner[i] - 1, b, applied);
       }
-      if (this.detonate(i, x, y)) return true;
+      // Proximity fuse: the blast goes off between the shot and the body, so near misses land.
+      const bx = b.x + 1.5, by = b.y + 6;
+      if (this.detonate(i, x + (bx - x) * 0.6, y + (by - y) * 0.6)) return true;
+      if (this.dmg[i] >= 1) return true; // a real shot breaks up on the body (no ice / rubble wall around them)
       this.settle(i, Math.floor(x - vx / Math.sqrt(sp2) * 2), Math.floor(y));
       return true;
     }

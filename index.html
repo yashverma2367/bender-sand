@@ -76,6 +76,19 @@
     .roomcode b { color: #e8b04a; font-size: 26px; letter-spacing: 0.35em; margin-left: 8px; user-select: all; }
     .ptag { width: 44px; text-align: center; border: 2px solid; border-radius: 5px; padding: 3px 0; font-size: 11px; font-weight: bold; }
     .pname { width: 130px; color: #fff; } .ptype { width: 90px; color: #9aa0ae; }
+    .panel.info { width: min(720px, 96vw); }
+    .infobody { display: flex; flex-direction: column; gap: 6px; max-height: 58vh; overflow: auto; padding-right: 4px; }
+    .irow { display: flex; gap: 10px; align-items: baseline; }
+    .ikey { width: 110px; flex: none; color: #e8b04a; font-size: 12px; }
+    .ibadge { flex: none; font-size: 12px; color: #e8e2d0; min-width: 18px; text-align: center; }
+    .iname { width: 130px; flex: none; color: #fff; }
+    .itext { color: #9aa0ae; font-size: 12px; }
+    .combo { border: 1px solid #2a2d38; border-radius: 6px; padding: 6px 9px; background: #151821; }
+    .chead { display: flex; justify-content: space-between; align-items: center; color: #fff; }
+    .ctag { border: 1px solid; border-radius: 4px; padding: 0 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .chow { color: #e8b04a; font-size: 12px; margin-top: 2px; }
+    .cres { color: #9aa0ae; font-size: 12px; }
+    .addcpu { margin-left: auto; padding: 3px 10px; font-size: 11px; }
     .btn.static { cursor: default; } .btn.static:not(.active) { opacity: 0.5; }
     .actions { display: flex; gap: 8px; justify-content: flex-end; }
     .results { display: flex; flex-direction: column; gap: 4px; }
@@ -89,6 +102,29 @@
     .cname { font-weight: bold; } .cinfo { color: #9aa0ae; }
     .bar { height: 4px; background: #3a1414; margin-top: 2px; } .bar i { display: block; height: 100%; background: #4cd964; }
     .bar.ult { background: #221833; } .bar.ult i { background: #c070ff; }
+    .cine { position: absolute; inset: 0; pointer-events: none; z-index: 5; display: flex; align-items: center; overflow: hidden; line-height: 1.2; }
+    .cine-bar { width: 100%; padding: 6px 0; background: linear-gradient(90deg, transparent, rgba(0,0,0,0.85) 15%, rgba(0,0,0,0.85) 85%, transparent);
+      border-top: 2px solid var(--c); border-bottom: 2px solid var(--c); text-align: center; opacity: 0; transform: translateX(-100%) skewX(-12deg); }
+    .cine-bar span { color: var(--c); font-size: clamp(16px, 3.4vw, 40px); font-weight: bold; letter-spacing: 0.25em; text-shadow: 0 0 12px var(--c); }
+    .cine.go .cine-bar { animation: cine 1.25s ease-out forwards; }
+    @keyframes cine { 0% { opacity: 0; transform: translateX(-100%) skewX(-12deg); } 15% { opacity: 1; transform: translateX(0) skewX(-12deg); }
+      80% { opacity: 1; transform: translateX(2%) skewX(-12deg); } 100% { opacity: 0; transform: translateX(100%) skewX(-12deg); } }
+    .portrait { image-rendering: pixelated; vertical-align: middle; }
+    .cards4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .bcard { background: #151821; border: 2px solid #2a2d38; border-radius: 8px; padding: 8px; color: #c9ccd4; font: inherit; cursor: pointer;
+      display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .bcard:hover, .bcard.active { border-color: var(--c); box-shadow: 0 0 12px -4px var(--c); }
+    .bname { color: var(--c); font-weight: bold; letter-spacing: 0.1em; }
+    .bmoves { display: flex; flex-direction: column; gap: 1px; font-size: 10px; color: #9aa0ae; align-self: stretch; }
+    .bmoves kbd { font-size: 9px; }
+    .bpick { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; }
+    .portrait.winner { align-self: center; filter: drop-shadow(0 0 10px var(--c)); }
+    @media (max-width: 700px) { .cards4 { grid-template-columns: repeat(2, 1fr); } }
+    .pips { display: flex; gap: 2px; margin-top: 3px; align-items: center; }
+    .pips span { font-size: 8px; line-height: 10px; width: 11px; text-align: center; border-radius: 2px; color: #3c4150; background: #12141b; }
+    .pips span.on { color: #0b0c10; background: #e8b04a; }
+    .pips span.ult.on { background: #c070ff; }
+    .orbn { margin-left: 4px; font-size: 8px; color: #ffb36b; letter-spacing: 1px; }
     .clock { position: absolute; top: 46px; left: 0; right: 0; text-align: center; color: #e8e2d0; font-size: 14px; text-shadow: 0 1px 2px #000; }
     .feed { position: absolute; right: 8px; top: 66px; text-align: right; font-size: 11px; text-shadow: 0 1px 2px #000; }
     .banner { position: absolute; top: 40%; left: 0; right: 0; text-align: center; font-size: 46px; font-weight: bold;

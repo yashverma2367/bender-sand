@@ -6,10 +6,12 @@
 import { Grid } from './grid.js';
 import { TOOLS, EL, WIND_TOOL, KIND, Kind } from './elements.js';
 import { createRenderer } from './render.js';
-import { Player, BENDER_TYPES } from './benders.js';
+import { Player, BENDER_TYPES, MAX_HP } from './benders.js';
 import { Particles } from './particles.js';
-import { updateAbilities, explode, creditDamage, channelInfo } from './abilities.js';
+import { updateAbilities, explode, creditDamage, channelInfo, MAX_ENERGY } from './abilities.js';
 import * as sfx from './sfx.js';
+import { setTrack, musicState } from './music.js';
+import { juice, stepJuice, resetJuice, slowmo, cinematic, ULT_NAMES } from './juice.js';
 import { buildUI } from './ui.js';
 import { MAPS, loadMap } from './maps.js';
 import { Match } from './match.js';
@@ -19,6 +21,7 @@ import { createTouchControls, isTouchDevice } from './touch.js';
 import { HostSession, GuestSession } from './online.js';
 import { applySnapshot } from './net.js';
 import { onlineConfigured } from './signal.js';
+import { Bot } from './bot.js';
 
 // World: wide enough for 3-4 benders, always shown in full.
 const W = 640, H = 216;
@@ -44,11 +47,12 @@ const fx = {
 };
 const world = { grid, particles, fx, player: null, players: [] };
 particles.onImpact = (x, y, r, type, owner) => explode(world, x, y, r, type, r >= 6, true, owner);
+Player.particles = particles;                                           // dust puffs
 particles.bodies = world.players;                                        // projectiles can hit benders
 particles.onHit = (attackerId, victim, dmg) => creditDamage(world, attackerId, dmg); // ...and charge the attacker's ult
 
 const state = { mode: 'menu', selected: EL.SAND, brush: 4, paused: false, heatView: false, fps: 0, count: 0, map: null };
-let match = null, lastMatch = null, resultsShown = false;
+let match = null, lastMatch = null, resultsShown = false, matchOverSeen = false;
 let mapTick = null; // live map hazards (e.g. erupting volcanoes)
 const mapEnv = { fx, players: world.players };
 let tickCount = 0;
@@ -96,6 +100,7 @@ function useMap(m) {
 }
 
 function startSandbox() {
+  resetJuice();
   state.mode = 'sandbox'; state.paused = false;
   match = null;
   sandboxPlayer.team = null;
@@ -106,16 +111,22 @@ function startSandbox() {
 }
 
 function startMatch(cfg, slots) {
+  resetJuice(); matchOverSeen = false;
   lastMatch = { cfg, slots };
   state.mode = 'match'; state.paused = false; resultsShown = false;
   match = new Match(world, cfg, slots);
-  match.players.forEach((p, k) => { p.input = createInput(); if (slots[k].net) p.input.net = slots[k].net; });
+  match.players.forEach((p, k) => {
+    p.input = createInput();
+    if (slots[k].net) p.input.net = slots[k].net;
+    p.bot = p.source.startsWith('cpu') ? new Bot(p, p.source.slice(4)) : null;
+  });
   setPlayers(match.players);
   match.start(useMap(cfg.map));
   layout();
 }
 
 function toMenu() {
+  resetJuice();
   state.mode = 'menu'; state.paused = false;
   match = null;
   setPlayers([]);
@@ -153,6 +164,9 @@ const screens = createScreens(stage, MAPS, {
   },
   onQuit: toMenu,
   onHostOnline: hostOnline,
+  onStartTraining: (t) => startMatch(
+    { format: 'duel', win: 'training', map: MAPS.find((m) => m.id === t.map) || MAPS[0], training: true, infinite: t.infinite },
+    [{ name: 'You', type: t.type, source: 'local', team: 0 }, { name: 'Dummy', type: t.dummy, source: 'cpu-' + t.mode, team: 1 }]),
   onJoinOnline: joinOnline,
   onOnlineLobby: () => { if (net) { toMenu(); net.backToLobby(); showHostLobby(); } },
   onOnlineLeave: leaveOnline,
@@ -166,7 +180,12 @@ function showHostLobby() {
     onCfg: (c) => { net.cfg = c; net.lobbyChanged(); },
     onType: (t) => { net.me.type = t; net.lobbyChanged(); },
     onName: (n) => { net.me.name = n; net.lobbyChanged(); },
-    onTeam: (k, t) => { if (k === 0) net.me.team = t; else if (net.guests[k - 1]) net.guests[k - 1].team = t; net.lobbyChanged(); },
+    onTeam: (k, t) => {
+      const live = net.guests.filter((g) => !g.gone);
+      if (k === 0) net.me.team = t; else if (live[k - 1]) live[k - 1].team = t; else { net.editBot(k, { team: t }); return; }
+      net.lobbyChanged();
+    },
+    onBot: (k, change) => net.editBot(k, change),
     onStart: () => {
       const c = net.cfg;
       const map = c.map === 'random' ? MAPS[(Math.random() * MAPS.length) | 0] : MAPS.find((m) => m.id === c.map);
@@ -212,7 +231,8 @@ async function joinOnline(code, name, type) {
   if (guest) guest.leave();
   const g = new GuestSession({
     onLobby: (lobby, you) => { guestView.lobby = lobby; guestView.you = you; if (state.mode !== 'guest') showGuestLobby(); },
-    onStart: () => {
+    onStart: (cfg) => {
+      guestView.map = cfg && cfg.map;
       state.mode = 'guest'; state.paused = false; match = null; mapTick = null; resultsShown = false;
       setPlayers([]); grid.clear(); particles.clear();
       Object.assign(guestView, { players: [], hud: null, since: 0 });
@@ -224,8 +244,11 @@ async function joinOnline(code, name, type) {
       guestView.players = j.p.map(guestPlayer);
       guestView.hud = j.h;
       guestView.since = 0;
-      if (j.s) for (const [n, x, sz] of j.s) sfx.play(n, x, sz);
-      if (j.fx) { shake = Math.max(shake, j.fx.shake || 0); flash = Math.max(flash, j.fx.flash || 0); }
+      if (j.s) for (const [n, x, sz] of j.s) playEvent(n, x, sz);
+      if (j.fx) {
+        shake = Math.max(shake, j.fx.shake || 0); flash = Math.max(flash, j.fx.flash || 0);
+        juice.popups = (j.fx.pu || []).map(([x, y, text, color, life]) => ({ x, y, text, color, life }));
+      }
     },
     onResults: (r) => screens.showResults({ result: r }, 'guest'),
     onLobbyBack: () => { toMenu(); showGuestLobby(); },
@@ -369,16 +392,56 @@ function tick() {
   if (tools() && isDown('p')) hose(toolPlayer(), sandboxInput);
   particles.step();
   for (const p of world.players) {
-    const inp = state.mode === 'sandbox' ? sampleInput(sandboxSource, sandboxInput) : sampleInput(p.source, p.input);
+    const inp = state.mode === 'sandbox' ? sampleInput(sandboxSource, sandboxInput) : p.bot ? p.bot.update(world) : sampleInput(p.source, p.input);
     p.update(inp);
     updateAbilities(p, inp, world);
     particles.defaultOwner = 0; // particles spawned outside a bender's moves belong to nobody
   }
+  if (match && match.cfg.training) trainingTick(match);
+  if (match && match.over && !match.result) victoryTick(match);
+  if (match && match.over && !matchOverSeen) { matchOverSeen = true; slowmo(90, 0.3); } // the final KO in slow motion
   if (match && match.result && !resultsShown) {
     resultsShown = true;
     screens.showResults(match, net ? 'host' : undefined);
     if (net) net.sendResults(match.result);
   }
+}
+
+// ---------- training ----------
+// Optional infinite mana / ultimate for you; the dummy heals after 2 s without a hit; damage within
+// 1 s of the previous hit adds up into the combo counter.
+function trainingTick(m) {
+  const me = m.players[0], d = m.players[1];
+  if (!me || !d) return;
+  if (m.cfg.infinite && !me.dead) { me.energy = MAX_ENERGY; me.ult = 100; }
+  m.combo = m.combo || 0; m.best = m.best || 0;
+  const prev = d.trainHp ?? d.hp;
+  if (!d.dead && d.hp < prev) {
+    if (!(m.comboT > 0)) m.combo = 0; // a new combo starts
+    m.combo += prev - d.hp; m.comboT = 60; d.quietT = 0;
+    m.best = Math.max(m.best, m.combo);
+  } else if (m.comboT > 0) m.comboT--;
+  if (!d.dead && ++d.quietT > 120 && d.hp < MAX_HP) d.hp = Math.min(MAX_HP, d.hp + 2);
+  d.trainHp = d.dead ? MAX_HP : d.hp;
+}
+
+// ---------- victory moment ----------
+// Between the final KO and the results: the winners power up with an element celebration.
+function victoryTick(m) {
+  const res = m.computeResult();
+  if (!res.winner) return;
+  m.t % 2 === 0 && res.winner.players.forEach((p) => {
+    if (p.dead) return;
+    p.cast = { pose: 'powerup', t: 4 }; p.invulnT = Math.max(p.invulnT || 0, 4); p.stunT = Math.max(p.stunT || 0, 2);
+    const cx = p.x + 1.5, cy = p.y + 6, a = m.t * 0.25;
+    for (let k = 0; k < 3; k++) {
+      const r = Math.random();
+      if (p.type === 'fire') particles.spawn(cx + (r - 0.5) * 6, cy + 6, (r - 0.5) * 0.8, -2.5 - Math.random() * 1.5, EL.FIRE, { ghost: true, gravity: 0.04, life: 30 });
+      else if (p.type === 'earth') particles.spawn(cx + (r - 0.5) * 14, cy + 7, 0, -1.2 - Math.random(), EL.STONE, { ghost: true, gravity: 0.03, life: 28 });
+      else if (p.type === 'water') particles.spawn(cx + Math.cos(a + k * 2.1) * 6, cy + 6 - (m.t % 40) * 0.4, Math.cos(a + k * 2.1) * 0.3, -0.6, EL.WATER, { ghost: true, gravity: 0, life: 24 });
+      else particles.spawn(cx + Math.cos(a + k * 2.1) * (4 + k * 2), cy + Math.sin(a + k * 2.1) * 6, -Math.sin(a + k * 2.1) * 1.2, Math.cos(a + k * 2.1) * 0.8 - 0.3, EL.STEAM, { ghost: true, gravity: -0.01, life: 20 });
+    }
+  });
 }
 
 // ---------- loop ----------
@@ -388,10 +451,25 @@ let netSounds = []; // sound events waiting for the next snapshot
 // Sounds: play what the simulation emitted this frame (only while actually playing, so the idle
 // menu map stays quiet), hum the held-move loops, and beep the countdown.
 let lastCount = -1, lastOver = false;
+// A sound event, or a 'cine:<type>:<color>' ultimate cinematic (slow-mo, darken, name banner).
+function playEvent(n, x, s) {
+  if (n.startsWith('cine:')) {
+    const [, type, color] = n.split(':');
+    cinematic(type, color);
+    screens.showCine(ULT_NAMES[type] || 'ULTIMATE', color);
+    sfx.play('ultcine', x);
+    return;
+  }
+  sfx.play(n, x, s);
+}
 function sounds() {
   const playing = state.mode === 'sandbox' || state.mode === 'match' || state.mode === 'guest';
+  // Music: the fight track while a match is on, the calm track everywhere else.
+  const over = state.mode === 'guest' ? guestView.hud && guestView.hud.over : match && match.over;
+  setTrack((state.mode === 'match' || state.mode === 'guest') && !over ? 'fight' : 'menu');
+  sfx.ambient(playing ? (state.mode === 'guest' ? guestView.map : state.map) : null);
   const events = sfx.drain();
-  if (playing && !state.paused) for (const [n, x, s] of events) sfx.play(n, x, s);
+  if (playing && !state.paused) for (const [n, x, s] of events) playEvent(n, x, s);
   if (net && match) netSounds.push(...events.slice(0, 40 - netSounds.length));
   const list = playing && !state.paused ? (state.mode === 'guest' ? guestView.players : world.players) : [];
   sfx.updateLoops(list.map((p, k) => { const c = !p.dead && channelInfo(p.type, p.channel); return { id: k, key: c && c.key, prog: c ? c.prog : 0, x: p.x }; }));
@@ -404,23 +482,31 @@ function sounds() {
 }
 
 function frame(now) {
-  acc += Math.min(now - last, 250);
+  const host = state.mode !== 'guest'; // guests just show the host's (already slowed) stream
+  acc += Math.min(now - last, 250) * (host && juice.slowT > 0 ? juice.slowRate : 1);
   last = now;
   let steps = 0;
   while (acc >= TICK_MS && steps < 4) {
+    if (host && juice.hitstop > 0 && !state.paused) { juice.hitstop--; acc -= TICK_MS; steps++; continue; } // freeze-frame
     if (state.mode === 'guest') { if (guest) guestTick(now); }
     else if (!state.paused) tick();
     acc -= TICK_MS;
-    if (net && match && (++netTicks & 1) === 0) { net.sendSnapshot(world, match, { shake, flash, paused: state.paused }, netSounds); netSounds = []; }
+    if (net && match && (++netTicks & 1) === 0) { net.sendSnapshot(world, match, { shake, flash, paused: state.paused, pu: juice.popups.map((q) => [Math.round(q.x), Math.round(q.y), q.text, q.color, q.life]) }, netSounds); netSounds = []; }
     steps++;
   }
   if (steps === 4) acc = 0; // too slow: drop backlog instead of spiraling
+  if (host) stepJuice();
 
   sounds();
   renderer.draw(state.heatView);
   if (tools() && mouse.inside) renderer.drawBrush(mouse.x, mouse.y, state.brush);
   renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles);
-  if (flash > 0) { canvas.style.filter = `brightness(${1 + flash * 0.25})`; if (--flash === 0) canvas.style.filter = ''; }
+  // Brightness: flashes brighten, an ultimate cinematic darkens the world for a moment.
+  const cineDim = juice.cine ? Math.max(0.5, 1 - 0.5 * Math.min(1, juice.cine.t / 6, (60 - juice.cine.t) / 15)) : 1;
+  if (state.mode === 'guest' && juice.cine && ++juice.cine.t > 70) juice.cine = null; // guests age it here
+  if (flash > 0) flash--;
+  const bright = (1 + flash * 0.25) * cineDim;
+  canvas.style.filter = bright === 1 ? '' : `brightness(${bright.toFixed(2)})`;
   if (shake > 0.2) {
     const sx = (Math.random() - 0.5) * shake * 2, sy = (Math.random() - 0.5) * shake * 2;
     canvas.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px)`;
@@ -446,5 +532,5 @@ requestAnimationFrame(frame);
 
 // Test hook: ?debug exposes the internals to the console.
 if (new URLSearchParams(window.location.search).has('debug')) {
-  window.__bs = { sfx, state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
+  window.__bs = { musicState, juice, Bot, sfx, state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
 }

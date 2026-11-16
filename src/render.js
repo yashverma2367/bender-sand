@@ -2,7 +2,9 @@
 import { EL, PALETTE, SHADES, IGNITE_T, pack } from './elements.js';
 import { FIELD } from './grid.js';
 import { BENDER_TYPES, BW, MAX_HP } from './benders.js';
+import { MAX_ENERGY } from './abilities.js';
 import { drawSprite } from './sprite.js';
+import { juice } from './juice.js';
 
 const BG = PALETTE[0];
 const WIND_TINT = pack('#9fd4ff');
@@ -151,6 +153,12 @@ export function createRenderer(grid, canvas) {
   const tagColors = new Map(); // css color -> packed
   function drawPlayer(p) {
     if (p.dead) return;
+    if (p.y + 12 < 0 && p.color) { // above the top of the map: a pointer in their color at the edge
+      if (!tagColors.has(p.color)) tagColors.set(p.color, pack(p.color));
+      const tc = tagColors.get(p.color), x = Math.round(p.x + 1.5);
+      for (let r = 0; r < 4; r++) for (let k = -r; k <= r; k++) px(x + k, 1 + r, tc);
+      for (let k = -4; k <= 4; k++) px(x + k, 5, DARK);
+    }
     if (p.invulnT > 0 && p.invulnT < 80 && (p.invulnT >> 2) % 2) return; // spawn protection blink
     // Air step afterimages: the pose at each earlier tick, in pale wind color, fading out.
     for (const ai of p.afterimages || []) {
@@ -179,7 +187,7 @@ export function createRenderer(grid, canvas) {
       px(hx + (len >> 1), by - 5, tc);
     }
     bar(hx, by - 4, len, p.hp / MAX_HP, HP_ON);
-    bar(hx, by - 3, len, p.energy / 100, ENERGY_ON);
+    bar(hx, by - 3, len, p.energy / MAX_ENERGY, ENERGY_ON);
     if (p.ult >= 100) px(hx + len, by - 4, (p.anim.t >> 3) & 1 ? ULT_ON : WHITE); // ultimate ready
     if (p.air < p.def.breath) bar(hx, by - 6, len, p.air / p.def.breath, AIR_ON);
   }
@@ -206,9 +214,34 @@ export function createRenderer(grid, canvas) {
 
   // Particles and player are drawn into the same pixel buffer as the world
   // (player skipped with null, e.g. heat view).
+  // 3x5 pixel digits for damage numbers (rows top to bottom, 3 bits each).
+  const DIGITS = ['111101101101111', '010110010010111', '111001111100111', '111001111001111', '101101111001001',
+    '111100111001111', '111100111101111', '111001001001001', '111101111101111', '111101111001111'];
+  function drawPopups() {
+    for (const q of juice.popups) {
+      if (!tagColors.has(q.color)) tagColors.set(q.color, pack(q.color));
+      const c = tagColors.get(q.color), fade = Math.min(1, q.life / 15);
+      const col = fade < 1 ? blend(BG, c, fade) : c;
+      const s = q.text, x0 = Math.round(q.x - (s.length * 4 - 1) / 2), y0 = Math.round(q.y);
+      for (let k = 0; k < s.length; k++) {
+        const d = DIGITS[+s[k]];
+        if (!d) continue;
+        for (let r = 0; r < 5; r++) for (let cc = 0; cc < 3; cc++) {
+          const X = x0 + k * 4 + cc, Y = y0 + r;
+          if (d[r * 3 + cc] === '1') px(X, Y, col);
+          else if (fade >= 1) { // dark outline so numbers read over anything
+            const i = Y * w + X;
+            if (X >= 0 && X < w && Y >= 0 && Y < h) buf[i] = blend(buf[i], DARK, 0.5);
+          }
+        }
+      }
+    }
+  }
+
   function present(players, particles) {
     if (particles) drawParticles(particles);
     if (players) for (const p of Array.isArray(players) ? players : [players]) drawPlayer(p);
+    drawPopups();
     wctx.putImageData(img, 0, 0, view.x, view.y, view.w, view.h);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(worldCanvas, view.x, view.y, view.w, view.h, 0, 0, view.w, view.h);

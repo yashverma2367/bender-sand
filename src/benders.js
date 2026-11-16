@@ -3,6 +3,7 @@ import { Kind, KIND, EL } from './elements.js';
 import { BODY_W, BODY_H, createAnim, updateAnim } from './sprite.js';
 import { initAbilities } from './abilities.js';
 import { emit } from './sfx.js';
+import { hitstop, slowmo, popup } from './juice.js';
 
 export const BW = BODY_W;     // collision box width in cells
 export const BH = BODY_H;     // collision box height in cells
@@ -13,6 +14,9 @@ const MAX_FALL = 3.5;
 const RESPAWN_TICKS = 120;
 const SPAWN_PROTECTION = 90; // ticks of invulnerability after (re)spawning
 const HOT_T = 300;            // cells hotter than this burn on contact
+const COYOTE = 7;             // ticks you can still jump after walking off a ledge
+const JUMP_BUFFER = 7;        // a jump pressed this many ticks before landing still happens
+const WALL_SLIDE = 0.7;       // max fall speed while sliding down a wall you're pushing into
 
 // passive multipliers: 0 = immune, 1 = normal
 // look: stance (idle pose), robe, topknot, hood, headband, rope = trailing scarf/cape/ponytail {len, from}
@@ -62,6 +66,7 @@ export class Player {
   static nextId = 0;
   static registry = new Map(); // id -> player
   static clock = 0;            // match ticks (for "who hit me last")
+  static particles = null;     // set by main: for landing / running dust
 
   get def() {
     return BENDER_TYPES[this.type];
@@ -114,20 +119,22 @@ export class Player {
       return;
     }
     if (this.invulnT > 0) this.invulnT--;
+    if (!(this.frozenT > 0)) this.shatterable = false; // thawed: nothing left to shatter
     if (this.stunT > 0) { this.stunT--; input = NO_INPUT; } // stunned / frozen: no control
     const d = this.def;
     this.resolveOverlap();
     const env = this.sense();
 
-    // Horizontal control.
+    // Horizontal control (briefly weakened right after a wall jump, so the kick-off carries).
     const dir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
     this.moveDir = dir; // read by the animation: running only happens on purpose
-    if (dir) this.facing = dir;
+    if (dir && !(this.wallLock > 0)) this.facing = dir;
     let speed = d.speed;
     if (this.slowT > 0) speed *= 0.55; // stone armor
     if (env.submerged) speed *= d.swimmer ? 0.9 : 0.5;
     if (env.lava) speed *= 0.4;
-    this.vx += (dir * speed - this.vx) * (this.onGround ? 0.3 : 0.12);
+    this.vx += (dir * speed - this.vx) * (this.onGround ? 0.3 : this.wallLock > 0 ? 0.03 : 0.12);
+    if (this.wallLock > 0) this.wallLock--;
     if (this.surfT > 0) { this.surfT--; this.vx = this.surfVX; } // earth surf carries you
 
     // Vertical: swim in liquid, otherwise gravity + jumps.
@@ -141,9 +148,29 @@ export class Player {
     } else {
       this.vy += GRAVITY;
       if (d.glide && input.up && this.vy > d.glide) this.vy = d.glide;
-      if (input.jump) {
-        if (this.onGround) { this.vy = -d.jump; emit('jump', this.x); }
-        else if (d.doubleJump && !this.usedDouble) { this.vy = -d.jump * 0.9; this.usedDouble = true; emit('jump2', this.x); }
+      // Forgiving jumps: coyote time (just walked off a ledge) + input buffer (pressed just
+      // before landing). Wall jumps kick you off a wall you're touching in the air.
+      if (this.onGround) this.coyote = COYOTE; else if (this.coyote > 0) this.coyote--;
+      if (input.jump) this.jumpBuf = JUMP_BUFFER; else if (this.jumpBuf > 0) this.jumpBuf--;
+      const bx = Math.floor(this.x), by = Math.floor(this.y);
+      const wall = this.onGround ? 0 : this.collide(bx + 1, by) ? 1 : this.collide(bx - 1, by) ? -1 : 0;
+      if (this.jumpBuf > 0 && (this.onGround || this.coyote > 0)) {
+        this.vy = -d.jump; this.jumpBuf = 0; this.coyote = 0; this.rising = true; emit('jump', this.x);
+      } else if (this.jumpBuf > 0 && wall) {
+        this.vy = -d.jump * 0.95; this.vx = -wall * 1.7; this.facing = -wall; this.wallLock = 10;
+        this.jumpBuf = 0; this.rising = true; this.usedDouble = false; emit('jump2', this.x);
+        this.dust(wall > 0 ? bx + 3 : bx - 1, by + 6, 4);
+      } else if (input.jump && d.doubleJump && !this.usedDouble && !this.onGround) {
+        this.vy = -d.jump * 0.9; this.usedDouble = true; this.jumpBuf = 0; this.rising = true; emit('jump2', this.x);
+      }
+      // Variable height: let go of jump early and the rise is cut short.
+      if (this.rising && !input.up && this.vy < -0.5) { this.vy *= 0.5; this.rising = false; }
+      if (this.vy >= 0) this.rising = false;
+      // Wall slide: pushing into a wall in the air slows the fall.
+      this.wallSlide = wall && dir === wall && this.vy > 0 ? wall : 0;
+      if (this.wallSlide) {
+        this.vy = Math.min(this.vy, WALL_SLIDE);
+        if ((this.anim.t & 7) === 0) this.dust(wall > 0 ? bx + 3 : bx - 1, by + 4, 1);
       }
       this.vy = Math.min(this.vy, MAX_FALL);
     }
@@ -171,7 +198,15 @@ export class Player {
     // without moveY ever being blocked, so don't rely on that).
     this.onGround = this.collide(Math.floor(this.x), Math.floor(this.y) + 1);
     const touchdown = this.onGround && !wasGround && impact > 0;
-    if (touchdown) { this.vy = 0; if (impact > 1.2) emit('land', this.x, impact); }
+    if (touchdown) {
+      this.vy = 0;
+      if (impact > 1.2) emit('land', this.x, impact);
+      if (impact > 0.9) this.dust(Math.floor(this.x + 1), Math.floor(this.y) + BH, Math.min(10, Math.round(impact * 3)));
+    } else if (this.onGround && Math.abs(this.vx) > 0.45 && (this.anim.t % 7) === 0) {
+      this.dust(Math.floor(this.x + 1 - Math.sign(this.vx) * 2), Math.floor(this.y) + BH, 1); // running kicks up a puff
+    }
+    // Damage numbers: hits within a short window add up into one popup.
+    if (this.dmgShowT > 0 && --this.dmgShowT === 0) this.flushDamage();
     if (this.onGround) this.usedDouble = false;
     if (this.flash > 0) this.flash--;
     updateAnim(this, env, touchdown ? impact : 0);
@@ -307,12 +342,49 @@ export class Player {
     }
     this.hp -= n;
     if (n >= 0.05) this.flash = 6;
+    // Shatter: hitting someone frozen by Flash Freeze breaks the ice: +10 damage, and they're free.
+    if (this.shatterable && this.frozenT > 0 && by >= 0 && n >= 3) {
+      this.shatterable = false; this.frozenT = 0; this.stunT = 0;
+      this.hp -= 10; n += 10;
+      emit('shatter', this.x);
+      hitstop(5);
+      const ps = Player.particles;
+      if (ps) for (let k = 0; k < 16; k++) { const a = (k / 16) * Math.PI * 2; ps.spawn(this.x + 1.5, this.y + 6, Math.cos(a) * 2.5, Math.sin(a) * 2.5 - 0.5, EL.ICE, { ghost: true, gravity: 0.08, life: 18 }); }
+    }
+    if (by >= 0) {
+      this.dmgShow = (this.dmgShow || 0) + n; this.dmgShowT = 12;
+      if (n >= 6) { // a real hit: freeze-frame + a readable knockback arc away from the attacker
+        hitstop(Math.min(6, 2 + n / 6));
+        const a = Player.registry.get(by), side = a ? Math.sign(this.x - a.x) || 1 : this.facing * -1;
+        this.vx += side * Math.min(2.2, n * 0.07);
+        this.vy -= Math.min(1.8, 0.4 + n * 0.05);
+      }
+    }
     if (n >= 0.3) emit('hit', this.x, n, 'hit' + this.id, 110);
     if (this.hp <= 0) this.die();
     return n;
   }
 
+  flushDamage() {
+    if (this.dmgShow >= 1) popup(this.x + 1, this.y - 8, Math.round(this.dmgShow), this.dmgShow >= 15 ? '#ffd24e' : '#ffffff');
+    this.dmgShow = 0; this.dmgShowT = 0;
+  }
+
+  // A puff of whatever you're standing on (sand, snow, stone ...), visual only.
+  dust(x, y, n) {
+    const ps = Player.particles, g = this.grid;
+    if (!ps) return;
+    let t = g.get(x, y);
+    if (!t || t === 255) t = g.get(x, y + 1);
+    if (!t || t === 255 || KIND[t] === Kind.LIQUID || KIND[t] === Kind.GAS) return;
+    for (let k = 0; k < n; k++) {
+      ps.spawn(x + (Math.random() - 0.5) * 3, y - 1, (Math.random() - 0.5) * 1.6, -0.3 - Math.random() * 0.7, t, { ghost: true, gravity: 0.06, life: 10 + Math.random() * 8 });
+    }
+  }
+
   die() {
+    this.flushDamage();
+    if (this.lastHitBy !== undefined) slowmo(28, 0.35); // a KO lands in slow motion
     this.hp = 0;
     this.dead = true;
     this.respawn = RESPAWN_TICKS;

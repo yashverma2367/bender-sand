@@ -13,17 +13,25 @@ import { emit } from './sfx.js';
 
 export const SLOTS = ['basic', 'heavy', 'special', 'defense', 'mobility', 'ultimate'];
 export const SLOT_KEYS = { z: 'basic', x: 'heavy', c: 'special', a: 'defense', s: 'mobility', v: 'ultimate' };
-export const MAX_ENERGY = 100;
-const ENERGY_REGEN = 0.3;      // per tick (~5.5 s from empty)
+export const MAX_ENERGY = 175;
+const ENERGY_REGEN = 0.45;     // per tick (~6.5 s from empty)
 const LANCE_CHARGE = 240;      // plasma lance: ticks of charging needed (4 s)
 const CLAP_CHARGE = 150;       // sonic clap: ticks of charging needed (2.5 s)
-const ULT_PER_DAMAGE = 0.5;    // ultimate meter gained per point of damage dealt (200 damage = full)
+const ULT_PER_DAMAGE = 0.5;
+// X orbs: hold X to form up to 3 element orbs that orbit you (one more every ORB_EVERY ticks of
+// charge); each tap of X throws one along your aim. Unused orbs fade after ORB_LIFE ticks.
+const ORB_EVERY = 14;
+const ORB_LIFE = 420;
+    // ultimate meter gained per point of damage dealt (200 damage = full)
 let currentOwner = -1;         // id of the player whose moves are being processed right now
 
 // The first enemy body (not attackerId) containing point (x, y), or null.
 function bodyAt(world, x, y, attackerId, pad = 0) {
-  for (const pl of world.players || [world.player]) {
+  const list = world.players || [world.player];
+  const me = list.find((q) => q && q.id === attackerId);
+  for (const pl of list) {
     if (!pl || pl.dead || pl.id === attackerId) continue;
+    if (me && me.team !== null && pl.team === me.team) continue;
     if (x >= pl.x - pad && x <= pl.x + BW + pad && y >= pl.y - pad && y <= pl.y + BH + pad) return pl;
   }
   return null;
@@ -47,8 +55,9 @@ export function damageArea(world, x, y, r, amount, attackerId = currentOwner) {
   for (const pl of world.players || [world.player]) {
     if (!pl || pl.dead || pl.id === attackerId) continue;
     const d = Math.hypot(pl.x + BW / 2 - x, pl.y + BH / 2 - y);
-    if (d > r + 3) continue;
-    const dmg = amount * (1 - (d / (r + 3)) * 0.7);
+    const reach = r * 1.3 + 7; // generous: a blast near you still hurts
+    if (d > reach) continue;
+    const dmg = amount * (1 - (d / reach) * 0.5);
     total += pl.damage(dmg, attackerId);
   }
   creditDamage(world, attackerId, total);
@@ -86,7 +95,12 @@ export function initAbilities(p) {
   p.magma = null;    // earth magma surge
   p.vacuums = [];    // air vacuum spheres
   p.afterimages = [];
-  p.airSteps = 2;
+  p.kicks = null;    // fire kick barrage in progress
+  p.crescents = [];  // flying fire crescents
+  p.bubbles = [];    // water bubble-trap orbs in flight
+  p.whips = [];      // water whips cracking
+  p.whipCombo = 0;   // ticks left to press Z again for the follow-up lash
+  p.whipLock = 0;
 }
 
 // ---------- explosions ----------
@@ -130,6 +144,14 @@ export function explode(world, x, y, r, type, breakStatic = false, knockPlayer =
   // Knock the player away from the blast (fireball at your own feet = rocket jump).
   // Blast damage to everyone but the attacker, scaled by blast size.
   damageArea(world, x, y, r, 6 + r * 2.2, owner);
+  if (type === EL.ICE) { // ice shots pin whoever they catch: frozen in place for 0.4 s
+    const own = (world.players || []).find((q) => q && q.id === owner);
+    for (const pl of world.players || []) {
+      if (!pl || pl.dead || pl.id === owner || (own && own.team !== null && pl.team === own.team) || pl.invulnT > 0) continue;
+      if (Math.hypot(pl.x + BW / 2 - x, pl.y + BH / 2 - y) > r * 1.3 + 4) continue;
+      if (!(pl.frozenT > 24)) { pl.frozenT = 24; pl.stunT = Math.max(pl.stunT || 0, 24); pl.vx *= 0.2; pl.vy *= 0.2; pl.shatterable = false; }
+    }
+  }
   // Knock bodies away from the blast (your own fireball at your feet = rocket jump).
   for (const pl of world.players || [world.player]) {
     if (!pl || pl.dead || (!knockPlayer && pl.id === owner)) continue;
@@ -253,76 +275,19 @@ const KITS = {
       cost: 20, cooldown: 150, pose: 'charge', poseTime: 12,
       cast(c) { c.p.bolt = { t: 0 }; },
     },
-    // X: hold to charge (embers gather at the hands), release a huge fast blast with recoil.
+    // X: fireballs. Hold to conjure up to 3 fireballs that orbit you; then each tap of X flings
+    // one along your aim (they explode on impact, or when they pass close to an enemy).
     heavy: {
-      cost: 10, hold: true, drain: 0.45, maxHold: 50, cooldown: 40, pose: 'charge',
-      hold(c, ch) {
-        const [hx, hy] = c.hand;
-        if (ch.t % 2 === 0) {
-          const a = Math.random() * Math.PI * 2, r = 5 + Math.random() * 3;
-          c.ps.spawn(hx + Math.cos(a) * r, hy + Math.sin(a) * r, -Math.cos(a) * 0.9, -Math.sin(a) * 0.9, EL.FIRE, { gravity: 0, life: 6 });
-        }
-      },
-      release(c, ch) {
-        const k = Math.min(1, ch.t / 50);
-        fireball(c, 9 + 3 * k, 4 + 5 * k, 3 + Math.round(4 * k));
-        c.p.vx -= c.p.facing * (0.5 + 1.3 * k);
-        c.fx.shake(2 + 5 * k);
-        c.p.cast = { pose: 'palms', t: 12 };
-      },
+      cost: 10, hold: true, drain: 0.45, maxHold: 40, cooldown: 25, pose: 'charge', orbs: true, quietRelease: true,
+      hold(c, ch) { drawOrbs(c, orbCount(ch.t), ch.t); },
+      release(c, ch) { makeOrbs(c, ch, () => ({})); },
     },
-    // C: blaze torrent (hold). A white-hot core of fire at 11-13 cells/tick inside a billowing
-    // wall of flame, ~90 cells long. Heats and ignites everything along it and blasts loose stuff
-    // away; held on one spot it melts rock (sand -> glass, stone / earth -> lava) and bores
-    // through walls. Aimed down it's a jetpack.
+    // C: fire kick barrage. Three fast flaming kicks (two slashes, then a spinning kick), each
+    // firing a crescent blade of fire ~75 cells along the aim. Crescents ignite wood / plants,
+    // blow loose sand away, burst on rock, and hit each enemy once with knockback.
     special: {
-      cost: 6, hold: true, drain: 1.0, maxHold: 600, cooldown: 12, pose: 'jet',
-      hold(c, ch) {
-        const g = c.grid, [ax, ay] = c.aim, [hx, hy] = c.hand, base = Math.atan2(ay, ax);
-        c.p.vx -= ax * 0.03;
-        c.p.vy -= ay * 0.1;
-        for (let k = 0; k < 4; k++) { // white-hot core
-          const a = base + (Math.random() - 0.5) * 0.08, sp = 11 + Math.random() * 2;
-          c.ps.spawn(hx, hy, Math.cos(a) * sp, Math.sin(a) * sp, EL.FIRE, { gravity: 0, drag: 0.97, life: 10 + Math.random() * 4, dmg: 0.06 });
-        }
-        for (let k = 0; k < 6; k++) { // billowing outer flames, spreading as they go
-          const a = base + (Math.random() - 0.5) * 0.6, sp = 5 + Math.random() * 3.5;
-          c.ps.spawn(hx, hy, Math.cos(a) * sp, Math.sin(a) * sp, EL.FIRE, { gravity: -0.04, drag: 0.93, life: 8 + Math.random() * 8, dmg: 0.06 });
-        }
-        if (ch.t % 3 === 0) c.ps.spawn(hx + ax * 30, hy + ay * 30 - 2, ax * 2, -1, EL.SMOKE, { gravity: -0.03, life: 40 });
-        // Along the torrent: the visible flame (a dense cone widening with distance around a
-        // flickering white-hot core) up to the first solid thing it hits.
-        const px = -ay, py = ax, flick = 0.85 + Math.random() * 0.3;
-        let x = hx, y = hy, hit = null;
-        for (let d = 0; d < 90 * flick; d++) {
-          x += ax; y += ay;
-          const X = Math.floor(x), Y = Math.floor(y);
-          if (!g.inBounds(X, Y)) break;
-          const i = Y * g.w + X, t = g.type[i];
-          if (t !== 0 && KIND[t] !== Kind.GAS) { hit = [X, Y]; break; }
-          if (t === EL.STEAM || t === EL.SMOKE) g.addWind(x, y, 3, ax * 2, ay * 2);
-          c.ps.spawn(x, y, 0, 0, EL.FIRE, { ghost: true, gravity: 0, life: 1 }); // core
-          const spread = 1 + d * 0.14, n = 1 + Math.floor(d / 25);
-          for (let k = 0; k < n; k++) {
-            const o = (Math.random() - 0.5) * 2 * spread;
-            c.ps.spawn(x + px * o, y + py * o - Math.random() * d * 0.03, 0, -0.2, EL.FIRE, { ghost: true, gravity: 0, life: 1 + ((Math.random() * 2) | 0) });
-          }
-        }
-        if (!hit) return;
-        // Impact point: blast loose stuff away, superheat, melt rock into lava.
-        for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
-          if (dx * dx + dy * dy > 9) continue;
-          const X = hit[0] + dx, Y = hit[1] + dy;
-          if (!g.inBounds(X, Y)) continue;
-          const i = Y * g.w + X, t = g.type[i], kind = KIND[t];
-          if (t === 0) { if (Math.random() < 0.3) g.set(X, Y, EL.FIRE); continue; }
-          g.temp[i] += 80;
-          if ((kind === Kind.POWDER && t !== EL.SAND) || kind === Kind.LIQUID) {
-            if (t !== EL.LAVA && Math.random() < 0.25) c.ps.lift(X, Y, ax * 4 + (Math.random() - 0.5) * 3, ay * 4 - 1.5 - Math.random() * 2, { bounces: 1 });
-          } else if (MELTS[t] && g.temp[i] > 1100) { g.transform(i, EL.LAVA); g.temp[i] = 1250; }
-        }
-        c.fx.shake(1.5);
-      },
+      cost: 22, cooldown: 70, pose: 'slash', poseTime: 6,
+      cast(c) { c.p.kicks = { t: 0, aim: c.aim.slice() }; },
     },
     // A: plasma lance (hold 4 s). A plasma ball grows and crackles at your hand while you charge
     // (you move slowly); at full charge a superheated lance fires in a straight line across the
@@ -333,6 +298,7 @@ const KITS = {
       hold(c, ch) {
         const k = ch.t / LANCE_CHARGE, [hx, hy] = c.hand, r = 0.8 + k * 3.5;
         c.p.slowT = 2;
+        if (k > 0.7) telegraph(c, hx, hy, c.aim[0], c.aim[1], 700, EL.FIRE, ch.t, k > 0.9 ? 3 : 6); // incoming!
         for (let n = 0; n < 6 + k * 18; n++) { // the plasma ball: white-hot core, fiery shell
           const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
           c.ps.spawn(hx + Math.cos(a) * d, hy + Math.sin(a) * d, 0, 0, d < r * 0.5 ? EL.ICE : EL.FIRE, { ghost: true, gravity: 0, life: 1 });
@@ -349,18 +315,13 @@ const KITS = {
         c.p.cd.defense = 40;
       },
     },
-    // S: rocket dash with a fire exhaust.
+    // S: fire jet (hold). Flame jets carry you along the arrows (forward by default, Up climbs,
+    // Down dives) until you let go or run out of mana; momentum carries on after.
     mobility: {
-      cost: 18, cooldown: 35, pose: 'dash', poseTime: 12,
-      cast(c) {
-        const [ax, ay] = c.aim;
-        c.p.dashT = 10;
-        c.p.dashVX = ax * 3.4;
-        c.p.dashVY = ay * 3.4 - (ay === 0 ? 0.2 : 0);
-        c.p.dashFire = true;
-        c.fx.shake(2);
-        if (ax === 0) c.p.cast = { pose: 'sky', t: 12 }; // straight up / down: arms overhead
-      },
+      cost: 8, hold: true, drain: 1.0, maxHold: 1e9, cooldown: 20, pose: 'dash',
+      start(c, ch) { startJet(c, ch); c.p.dashFire = true; },
+      hold(c, ch) { jet(c, ch, 3.8); c.p.dashFire = true; },
+      release(c, ch) { endJet(c, ch); },
     },
     // V: inferno ascension. A fire power-up transformation: you plant yourself and power up for
     // 1.5 s (flame aura, burning hair, rocks floating up around you, sparks, shockwave pulses),
@@ -390,28 +351,18 @@ const KITS = {
         c.fx.shake(4);
       },
     },
-    // X: hold to raise a boulder from the ground (grows while held), release to hurl it.
+    // X: stones. Hold to rip rock from the ground into up to 3 stones that orbit you; then each
+    // tap of X hurls one along your aim.
     heavy: {
-      cost: 8, hold: true, drain: 0.4, maxHold: 60, cooldown: 40, pose: 'lift',
+      cost: 8, hold: true, drain: 0.4, maxHold: 40, cooldown: 25, pose: 'lift', orbs: true, quietRelease: true,
       start(c, ch) { ch.rock = []; },
       hold(c, ch) {
-        if (ch.t % 2 === 0 && ch.rock.length < 30) ch.rock.push(...takeGround(c, 1, boulderPos(c, ch)));
-        const [bx, by] = boulderPos(c, ch), r = Math.sqrt(ch.rock.length / Math.PI) + 0.5;
-        ch.rock.forEach((t, k) => { // draw the held boulder as a hovering disc of its cells
-          const a = k * 2.4, d = r * Math.sqrt((k + 0.5) / ch.rock.length);
-          c.ps.spawn(bx + Math.cos(a) * d, by + Math.sin(a) * d, 0, 0, t, { ghost: true, gravity: 0, life: 1 });
-        });
+        if (ch.t % 2 === 0 && ch.rock.length < 27) ch.rock.push(...takeGround(c, 1, c.center));
+        drawOrbs(c, orbCount(ch.t), ch.t, ch.rock);
       },
       release(c, ch) {
-        if (!ch.rock.length) return;
-        const n = ch.rock.length;
-        const [bx, by] = boulderPos(c, ch);
-        const save = c.hand; c.hand = [bx, by];
-        rockShot(c, ch.rock, 9, 3 + n / 5, Math.sqrt(n / Math.PI));
-        c.hand = save;
-        c.p.vx -= c.p.facing * (0.3 + n / 40);
-        c.fx.shake(1 + n / 8);
-        c.p.cast = { pose: 'palms', t: 12 };
+        const n = orbCount(ch.t), per = Math.max(6, Math.floor(ch.rock.length / n));
+        makeOrbs(c, ch, (k) => { const cells = ch.rock.slice(k * per, (k + 1) * per); while (cells.length < 6) cells.push(EL.STONE); return { cells }; });
       },
     },
     // C: a stone pillar bursts up right in front of you (a wall). Down+C: under your own feet,
@@ -445,27 +396,24 @@ const KITS = {
         c.fx.shake(3);
       },
     },
-    // S: sand-jet dash. Forward on the ground: surf a wave of sand, leaving a trail of real
-    // sand behind. Any other aim (or in the air): blast sand out of your feet and shoot the
-    // opposite way along the aim (aim down = sand jet lifts you). Hitting a pillar fires it.
+    // S: sand jet (hold). On the ground, going sideways: surf a wave of real sand. Otherwise a
+    // jet of sand from your feet carries you along the arrows. Surf / jet into a pillar to fire it.
     mobility: {
-      cost: 15, cooldown: 35, pose: 'surf', poseTime: 16,
-      cast(c) {
-        const [ax, ay] = c.aim;
-        if (c.p.onGround && ay === 0) {
-          c.p.surfT = 26;
-          c.p.surfVX = c.p.facing * 2.4;
+      cost: 8, hold: true, drain: 0.8, maxHold: 1e9, cooldown: 20, pose: 'surf',
+      start(c, ch) { startJet(c, ch); },
+      hold(c, ch) {
+        const p = c.p, [, ay] = c.aim;
+        if (p.onGround && Math.abs(ay) < 0.1 && !ch.flying) { // ground surf
+          ch.vx += (p.facing * 3.2 - ch.vx) * 0.2; ch.vy = 0;
+          p.dashT = 0; p.surfT = 2; p.surfVX = ch.vx; p.jetType = 0;
+          p.cast = { pose: 'surf', t: 2 };
         } else {
-          const dx = ay > 0 && ax === 0 ? 0 : ax, dy = ay > 0 && ax === 0 ? -1 : ay; // down = jet lifts you
-          const l = Math.hypot(dx, dy) || 1;
-          c.p.dashT = 11;
-          c.p.dashVX = (dx / l) * 2.4;
-          c.p.dashVY = (dy / l) * 2.4;
-          c.p.jetType = EL.SAND;
-          c.p.cast = { pose: dy < 0 && dx === 0 ? 'sky' : 'dash', t: 14 };
+          ch.flying = true; // once airborne, stay in jet mode until released
+          jet(c, ch, 3.3);
+          p.jetType = EL.SAND;
         }
-        c.fx.shake(2);
       },
+      release(c, ch) { endJet(c, ch); },
     },
     // V: tectonic rupture. A fissure races forward ~110 cells: 12 stone spikes erupt in sequence,
     // each taller than the last, hurling debris; then they all shatter at once into rubble.
@@ -474,104 +422,57 @@ const KITS = {
       cast(c) {
         c.p.rupture = { t: 0, x0: c.p.x + BW / 2, y0: c.p.y, f: c.p.facing, next: 0, spikes: [], done: -1 };
         c.fx.shake(8);
+        for (let d = 6; d < 112; d += 3) { // the fissure cracks open along the ground first
+          const x = c.p.x + BW / 2 + c.p.facing * d, gy = groundBelow(c.grid, Math.floor(x), c.p.y);
+          if (gy >= 0) c.ps.spawn(x, gy - 1, 0, -0.4 - Math.random() * 0.6, EL.SAND, { ghost: true, gravity: 0.05, life: 10 + d / 6 });
+        }
       },
     },
   },
 
   water: {
-    // Z: healing water (hold). Water swirls around you and heals you; much faster when you're
-    // standing in, or right next to, a body of water. You move slowly while healing.
+    // Z: water whip. A lash of water cracks out ~45 cells along your aim. Press again within half
+    // a second for the follow-up lash, which yanks whoever it hits toward you. Douses fire.
     basic: {
-      cost: 4, hold: true, drain: 0.45, maxHold: 600, cooldown: 30, pose: 'heal',
-      hold(c, ch) {
-        const g = c.grid, [cx, cy] = c.center;
-        let near = 0; // real water within ~10 cells
-        for (let dy = -10; dy <= 10; dy += 2) for (let dx = -10; dx <= 10; dx += 2) {
-          const X = Math.floor(cx + dx), Y = Math.floor(cy + dy);
-          if (g.inBounds(X, Y) && g.type[Y * g.w + X] === EL.WATER) near++;
-        }
-        const boost = near > 12 ? 2.5 : 1;
-        c.p.hp = Math.min(MAX_HP, c.p.hp + 0.25 * boost);
-        c.p.slowT = 2;
-        for (let k = 0; k < 16; k++) { // glowing healing water orbiting the body
-          const a = ch.t * 0.22 + (k / 16) * Math.PI * 2, r = 5.5 + Math.sin(ch.t * 0.15 + k) * 1.2;
-          c.ps.spawn(cx + Math.cos(a) * r, cy + Math.sin(a) * r * 1.3, 0, 0, k % 2 ? EL.ICE : EL.GLASS, { ghost: true, gravity: 0, life: 1 });
-        }
-        if (ch.t % 3 === 0) c.ps.spawn(cx + (Math.random() - 0.5) * 4, cy + 4, 0, -0.5, EL.ICE, { ghost: true, gravity: 0, life: 12 }); // rising glints
-        if (near && ch.t % 2 === 0) { // drawn up from the nearby water
-          const a = Math.random() * Math.PI * 2;
-          c.ps.spawn(cx + Math.cos(a) * 9, cy + Math.sin(a) * 9, -Math.cos(a) * 1.6, -Math.sin(a) * 1.6, EL.WATER, { ghost: true, gravity: 0, life: 5 });
-        }
+      cost: 12, cooldown: 12, pose: 'slash', poseTime: 10,
+      ready(c) { return !(c.p.whipLock > 0); },
+      cast(c) {
+        const p = c.p, second = p.whipCombo > 0;
+        p.whips.push({ t: 0, aim: c.aim.slice(), second, hit: new Set() });
+        p.whipCombo = second ? 0 : 32;
+        if (second) p.whipLock = 45;
+        p.cast = { pose: second ? 'slashUp' : 'slash', t: 10 };
+        p.vx += p.facing * 0.3;
       },
     },
-    // X: hold to gather water into an ice spear (grows while held), release to fire ice shards
-    // that freeze the area they hit.
+    // X: ice spears. Hold to draw water into up to 3 ice spears that orbit you; then each tap
+    // of X fires one along your aim (freezes the area it hits).
     heavy: {
-      cost: 8, hold: true, drain: 0.4, maxHold: 50, cooldown: 40, pose: 'lift',
+      cost: 8, hold: true, drain: 0.4, maxHold: 40, cooldown: 25, pose: 'lift', orbs: true, quietRelease: true,
       start(c, ch) { ch.n = 0; },
       hold(c, ch) {
-        if (ch.t % 2 === 0 && ch.n < 18) ch.n += takeWater(c, 1, c.hand).length;
-        const [ax, ay] = c.aim, [hx, hy] = c.hand;
-        for (let k = 0; k < ch.n; k++) { // the spear, pointing along the aim
-          c.ps.spawn(hx + ax * (k * 0.5 - 1), hy + ay * (k * 0.5 - 1) - (ay === 0 ? 2 : 0), 0, 0, EL.ICE, { ghost: true, gravity: 0, life: 1 });
-        }
+        if (ch.t % 2 === 0 && ch.n < 18) ch.n += takeWater(c, 1, c.center).length;
+        drawOrbs(c, orbCount(ch.t), ch.t);
       },
-      release(c, ch) {
-        if (!ch.n) return;
-        const [ax, ay] = c.aim, [hx, hy] = c.hand;
-        for (let k = 0; k < ch.n; k++) {
-          c.ps.spawn(hx - ax * k * 0.5, hy - ay * k * 0.5, ax * 12, ay * 12, EL.ICE,
-            { gravity: 0.01, drag: 1, boom: k === 0 ? 3 + ch.n / 5 : 0 }); // shards stick, no bounce
-        }
-        c.p.vx -= c.p.facing * (0.3 + ch.n / 40);
-        c.fx.shake(1 + ch.n / 5);
-        c.p.cast = { pose: 'palms', t: 12 };
-      },
+      release(c, ch) { const n = orbCount(ch.t); makeOrbs(c, ch, () => ({ shards: Math.max(6, Math.round(ch.n / n)) })); },
     },
-    // C: water stream (hold). A pressurized torrent of water (11-13 cells/tick) with a bright core,
-    // drawn from nearby water (or conjured). Blasts loose sand / earth away where it hits
-    // (hydraulic mining), puts out fire, and the water it fires stays in the world.
+    // C: bubble trap. Throws a water orb; the first enemy it touches is engulfed in a bubble and
+    // floats helplessly, slowly drowning, for 2 s, then it pops in a splash. Flash Freeze (A)
+    // while someone is trapped freezes the bubble solid around them (3 s).
     special: {
-      cost: 5, hold: true, drain: 0.9, maxHold: 600, cooldown: 12, pose: 'jet',
-      hold(c, ch) {
-        const g = c.grid, [ax, ay] = c.aim, [hx, hy] = c.hand, base = Math.atan2(ay, ax);
-        const got = takeWater(c, 5, null, 0); // drain already pays for conjured water
-        for (let k = 0; k < got.length; k++) {
-          const a = base + (Math.random() - 0.5) * 0.1, sp = 11 + Math.random() * 2;
-          c.ps.spawn(hx, hy, Math.cos(a) * sp, Math.sin(a) * sp, EL.WATER, { gravity: 0.01, drag: 0.995, dmg: 0.06 });
-        }
-        // Beam core: a flickering line to the first thing it hits; fire on the way goes out.
-        let x = hx, y = hy, hit = null;
-        for (let d = 0; d < 80; d++) {
-          const X = Math.floor(x), Y = Math.floor(y);
-          if (!g.inBounds(X, Y)) break;
-          const t = g.type[Y * g.w + X];
-          if (t !== 0 && KIND[t] !== Kind.GAS) { hit = [X, Y]; break; }
-          if (t === EL.FIRE) g.transform(Y * g.w + X, EL.STEAM);
-          if ((d + ch.t) % 3 !== 0) c.ps.spawn(x, y, 0, 0, d % 2 ? EL.WATER : EL.ICE, { ghost: true, gravity: 0, life: 1 });
-          x += ax; y += ay;
-        }
-        if (hit) { // hydraulic mining: loose ground at the impact is blasted along the stream
-          for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
-            const X = hit[0] + dx, Y = hit[1] + dy, d2 = dx * dx + dy * dy;
-            if (d2 > 36 || !g.inBounds(X, Y)) continue;
-            const i = Y * g.w + X, t = g.type[i];
-            if (d2 <= 5 && KIND[t] === Kind.POWDER && Math.random() < 0.35) c.ps.lift(X, Y, ax * 5 + (Math.random() - 0.5) * 3, ay * 5 - 1 - Math.random() * 2, { bounces: 1 });
-            if (IGNITE_T[t] !== Infinity && g.life[i] > 0) { g.life[i] = 0; g.temp[i] = 20; } // douses a wide splash zone
-            else if (t === EL.FIRE) g.transform(i, EL.STEAM);
-          }
-        }
-        if (ch.t % 2 === 0) c.ps.spawn(hx, hy, (Math.random() - 0.5), -0.6, EL.WATER, { ghost: true, gravity: 0.1, life: 6 }); // spray
-        c.p.vx -= ax * 0.02;
-        c.p.vy -= ay * 0.08;
+      cost: 20, cooldown: 90, pose: 'palms', poseTime: 10,
+      cast(c) {
+        const [ax, ay] = c.aim, [hx, hy] = c.hand;
+        c.p.bubbles.push({ x: hx + ax * 3, y: hy + ay * 3, vx: ax * 5, vy: ay * 5, life: 48 });
       },
     },
-    // A: flash freeze. Everything within ~25 cells freezes in an instant: water -> ice, lava ->
-    // obsidian, fire dies, and enemies caught are frozen solid (can't move or cast) for 1.5 s.
+    // A: flash freeze. Everything within ~40 cells freezes in an instant: water -> ice, lava ->
+    // obsidian, fire dies, and enemies caught are frozen solid for 2 s. Hitting a frozen enemy
+    // shatters the ice for bonus damage (and frees them).
     defense: {
       cost: 25, cooldown: 200, pose: 'guard', poseTime: 16,
       cast(c) {
-        const g = c.grid, p = c.p, [cx, cy] = c.center, R = 25;
+        const g = c.grid, p = c.p, [cx, cy] = c.center, R = 40;
         // Freeze the world around you (but not the cells you're standing in).
         for (let dy = -R; dy <= R; dy += 2) for (let dx = -R; dx <= R; dx += 2) {
           if (dx * dx + dy * dy > R * R) continue;
@@ -583,31 +484,33 @@ const KITS = {
         for (const pl of c.world.players || []) {
           if (pl === p || pl.dead) continue;
           if (Math.hypot(pl.x + BW / 2 - cx, pl.y + BH / 2 - cy) > R + 2) continue;
-          const hit = pl.damage(10, p.id); if (!hit) continue; total += hit; pl.frozenT = 90; pl.stunT = 90; pl.vx = 0; pl.vy = 0;
+          const hit = pl.damage(10, p.id); if (!hit) continue; total += hit; pl.frozenT = 120; pl.stunT = 120; pl.vx = 0; pl.vy = 0; pl.shatterable = true;
         }
         creditDamage(c.world, p.id, total);
+        // Combo: anyone in your bubble trap (any range) freezes solid inside it.
+        for (const pl of c.world.players || []) {
+          if (!pl.bubble || pl.bubble.by !== p.id || pl.dead) continue;
+          pl.frozenT = 180; pl.stunT = 180; pl.vx = 0; pl.vy = 0; pl.shatterable = true;
+          popBubble(c, pl, EL.ICE);
+          emit('combo', pl.x);
+        }
         p.freezeBurst = { t: 0, x: cx, y: cy, R };
         c.fx.shake(5);
         if (c.fx.flash) c.fx.flash(2);
       },
     },
-    // S: riptide: blast along the aim on a jet of real water (aim down = lifted on the jet).
-    // Stronger and longer when cast from inside water.
+    // S: riptide (hold). A jet of real water carries you along the arrows until you let go or run
+    // out of mana. Faster, and much cheaper, while you're in water.
     mobility: {
-      cost: 15, cooldown: 35, pose: 'dash', poseTime: 14,
-      cast(c) {
-        const [ax, ay] = c.aim;
-        const dx = ay > 0 && ax === 0 ? 0 : ax, dy = ay > 0 && ax === 0 ? -1 : ay;
-        const l = Math.hypot(dx, dy) || 1;
+      cost: 8, hold: true, drain: 0.9, maxHold: 1e9, cooldown: 20, pose: 'dash',
+      start(c, ch) { startJet(c, ch); },
+      hold(c, ch) {
         const inWater = c.p.anim && c.p.anim.state === 'swim';
-        const sp = inWater ? 4 : 2.6;
-        c.p.dashT = inWater ? 14 : 11;
-        c.p.dashVX = (dx / l) * sp;
-        c.p.dashVY = (dy / l) * sp - (dy === 0 ? 0.2 : 0);
+        if (inWater) c.p.energy = Math.min(MAX_ENERGY, c.p.energy + 0.5);
+        jet(c, ch, inWater ? 4.6 : 3.5);
         c.p.jetType = EL.WATER;
-        c.p.cast = { pose: dy < 0 && dx === 0 ? 'sky' : 'dash', t: 14 };
-        c.fx.shake(2);
       },
+      release(c, ch) { endJet(c, ch); },
     },
     // V: glacial cataclysm. A huge tsunami rises and surges forward; mid-crash the whole wave
     // flash-freezes in the air; then it shatters into a storm of ice shards blasting forward.
@@ -631,25 +534,12 @@ const KITS = {
         c.p.vacuums.push({ x: hx, y: hy, vx: ax * 7, vy: ay * 7, t: 0, phase: 'fly' });
       },
     },
-    // X: air cannon: hold to compress a swirling ball of air (grows), release to fire a pressure
-    // sphere that bursts into a huge wind shockwave.
+    // X: air cannons. Hold to compress up to 3 balls of air that orbit you; then each tap of X
+    // fires one as a pressure sphere that bursts into a wind shockwave.
     heavy: {
-      cost: 8, hold: true, drain: 0.45, maxHold: 50, cooldown: 40, pose: 'charge',
-      hold(c, ch) {
-        const k = Math.min(1, ch.t / 50), r = 1.5 + k * 3.5, [cx, cy] = cannonPos(c);
-        for (let n = 0; n < 10; n++) {
-          const a = ch.t * 0.5 + n * 0.63, rr = r * (0.4 + (n % 3) * 0.3);
-          c.ps.spawn(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, 0, 0, EL.STEAM, { ghost: true, gravity: 0, life: 1 });
-        }
-        c.grid.addWind(cx, cy, 6 + r, 0, 0); // keeps the field around the hands busy
-      },
-      release(c, ch) {
-        const k = Math.min(1, ch.t / 50), [ax, ay] = c.aim, [cx, cy] = cannonPos(c);
-        c.p.cannons.push({ x: cx, y: cy, vx: ax * 9, vy: ay * 9, r: 1.5 + k * 3.5, power: k, life: 50 });
-        c.p.vx -= c.p.facing * (0.4 + k);
-        c.fx.shake(2 + 4 * k);
-        c.p.cast = { pose: 'palms', t: 12 };
-      },
+      cost: 8, hold: true, drain: 0.45, maxHold: 40, cooldown: 25, pose: 'charge', orbs: true, quietRelease: true,
+      hold(c, ch) { drawOrbs(c, orbCount(ch.t), ch.t); c.grid.addWind(c.center[0], c.center[1], 10, 0, 0); },
+      release(c, ch) { makeOrbs(c, ch, () => ({})); },
     },
     // C: tornado, aimable: forward = travels along the ground, up / diagonal = flies that way,
     // down = spawns under you and carries you up. Sucks in loose stuff and spins it up the
@@ -673,6 +563,10 @@ const KITS = {
       hold(c, ch) {
         const k = ch.t / CLAP_CHARGE, [hx, hy] = c.hand;
         c.p.slowT = 2;
+        if (k > 0.75) { // the cone edges (+-35 degrees, ~60 cells)
+          const a0 = Math.atan2(c.aim[1], c.aim[0]);
+          for (const da of [-0.61, 0.61]) telegraph(c, hx, hy, Math.cos(a0 + da), Math.sin(a0 + da), 60, EL.STEAM, ch.t, 4);
+        }
         for (let n = 0; n < 4 + k * 10; n++) { // air spiralling in between the hands
           const a = ch.t * 0.4 + n * 1.3, r = 3 + (1 - k) * 8 + Math.random() * 3;
           streak(c, hx + Math.cos(a) * r, hy + Math.sin(a) * r * 0.8, -Math.cos(a) * 0.8, -Math.sin(a) * 0.6, 2);
@@ -690,21 +584,19 @@ const KITS = {
         c.p.cast = { pose: 'palms', t: 12 };
       },
     },
-    // S: air step: a burst along any of 8 directions that eases out smoothly, leaving fading
-    // wind afterimages. Two charges, refilled on landing; each step also restores the double jump.
+    // S: air flight (hold). Ride a rushing current of wind along the arrows until you let go or run
+    // out of mana, leaving fading wind afterimages.
     mobility: {
-      cost: 10, cooldown: 10, pose: 'dash', poseTime: 10,
-      ready(c) { return c.p.airSteps > 0; },
-      cast(c) {
-        const [ax, ay] = c.aim;
-        c.p.airSteps--;
-        c.p.step = { t: 0, dx: ax, dy: ay === 0 ? -0.05 : ay };
-        c.p.usedDouble = false;
-        if (ax === 0) c.p.cast = { pose: 'sky', t: 10 };
-        const [cx, cy] = c.center;
-        for (let k = 0; k < 12; k++) { const a = (k / 12) * Math.PI * 2; streak(c, cx, cy, Math.cos(a) * 1.5, Math.sin(a) * 1.5, 6); }
-        c.fx.shake(1.5);
+      cost: 8, hold: true, drain: 0.85, maxHold: 1e9, cooldown: 20, pose: 'dash',
+      start(c, ch) { startJet(c, ch); },
+      hold(c, ch) {
+        const p = c.p;
+        jet(c, ch, 4.0);
+        if (ch.t % 2 === 0) p.afterimages.push({ x: p.x, y: p.y, j: p.anim.j, facing: p.facing, life: 9 });
+        c.grid.addWind(c.center[0], c.center[1], 5, ch.vx * 0.4, ch.vy * 0.4);
+        p.usedDouble = false;
       },
+      release(c, ch) { endJet(c, ch); },
     },
     // V: wind dragon: a serpent of wind snakes across the battlefield in swooping curves,
     // tearing up the ground and carrying the debris in its body, loops back at the edges, then
@@ -784,16 +676,7 @@ const THROWN_TAG = 9; // flung out of a tornado's top: falls freely, isn't re-ca
 
 function airOngoing(c) {
   const p = c.p, g = c.grid, ps = c.ps;
-  if (p.onGround) p.airSteps = 2;
 
-  // Air step: speed eases out over 10 ticks (5.2 -> ~0.4 cells/tick); afterimages every tick.
-  if (p.step) {
-    const st = p.step, k = st.t / 10, sp = 5.2 * Math.pow(1 - k, 1.4) + 0.4;
-    p.dashT = 2; p.dashVX = st.dx * sp; p.dashVY = st.dy * sp;
-    p.afterimages.push({ x: p.x, y: p.y, j: p.anim.j, facing: p.facing, life: 9 });
-    g.addWind(c.center[0], c.center[1], 5, st.dx * sp * 0.5, st.dy * sp * 0.5);
-    if (++st.t >= 10) { p.step = null; p.dashT = 0; }
-  }
   p.afterimages = p.afterimages.filter((a) => --a.life > 0);
 
   // Air blades: a crescent whose leading arc sweeps the air; loose cells along the arc are
@@ -848,15 +731,15 @@ function airOngoing(c) {
       b.x += dx; b.y += dy;
       const X = Math.floor(b.x), Y = Math.floor(b.y);
       if (X < 0 || X >= g.w || Y >= g.h) { hit = true; break; }
-      if (bodyAt(c.world, b.x, b.y, p.id, 1)) { hit = true; break; }
+      if (bodyAt(c.world, b.x, b.y, p.id, 4 + b.r)) { hit = true; break; } // proximity burst
       if (Y < 0) continue;
       const t = g.type[Y * g.w + X];
       if (t !== 0 && KIND[t] !== Kind.GAS) hit = true;
     }
     if (hit) {
-      const R = 6 + b.power * 10;
+      const R = b.orb ? 6.5 : 6 + b.power * 10;
       explode(c.world, b.x, b.y, R, 0);
-      explode(c.world, b.x, b.y, R * 0.6, 0); // second pass: inner core blown out harder
+      if (!b.orb) explode(c.world, b.x, b.y, R * 0.6, 0); // second pass: inner core blown out harder
       for (let k = 0; k < 24; k++) { const a = (k / 24) * Math.PI * 2; streak(c, b.x, b.y, Math.cos(a) * 3, Math.sin(a) * 3, 6); }
       return false;
     }
@@ -1252,6 +1135,7 @@ function zOngoing(c) {
   if (bo) {
     const [hx, hy] = c.hand;
     if (bo.t < 10) {
+      telegraph(c, hx, hy, c.aim[0], c.aim[1], 120, EL.ICE, bo.t, 5); // where the bolt will strike
       for (let k = 0; k < 6; k++) { // electricity crawling over the hands, growing
         const a = Math.random() * Math.PI * 2, r = 1 + Math.random() * (2 + bo.t * 0.4);
         spark(c, hx + Math.cos(a) * r, hy + Math.sin(a) * r, 0, 0, 2);
@@ -1356,7 +1240,7 @@ function zOngoing(c) {
         v.x += dx; v.y += dy;
         const X = Math.floor(v.x), Y = Math.floor(v.y);
         const blocked = X < 2 || X >= g.w - 2 || Y >= g.h - 2 || (Y >= 0 && g.type[Y * g.w + X] !== 0 && KIND[g.type[Y * g.w + X]] !== Kind.GAS)
-          || bodyAt(c.world, v.x, v.y, p.id, 1);
+          || bodyAt(c.world, v.x, v.y, p.id, 4);
         if (blocked) { v.x -= dx * 8; v.y -= dy * 8; v.phase = 'pull'; v.t = 0; break; } // hover just off the surface
       }
       if (v.phase === 'fly' && v.t > 22) { v.phase = 'pull'; v.t = 0; }
@@ -1459,6 +1343,114 @@ function boulderPos(c, ch) {
 
 // ---------- per-tick update ----------
 // world: { grid, particles, fx }. input.held[slot] is true while that key is down.
+// Hand position for any aim vector (straight up / down: above the head / below the feet).
+function handFor(p, center, aim) {
+  return Math.abs(aim[0]) < 0.2
+    ? [center[0], center[1] + aim[1] * 7.5]
+    : [center[0] + aim[0] * 3, p.y + 4.5 + aim[1] * 3];
+}
+
+// ---------- telegraphs ----------
+// A blinking dotted warning line from (x, y) along (ax, ay): shows where a big move is about to go.
+function telegraph(c, x, y, ax, ay, len, type, t, every = 4) {
+  if ((t >> 2) & 1) return; // blink
+  const g = c.grid;
+  for (let d = 6; d < len; d += every) {
+    const X = x + ax * d, Y = y + ay * d;
+    if (X < 0 || X >= g.w || Y >= g.h) break;
+    c.ps.spawn(X, Y, 0, 0, type, { ghost: true, gravity: 0, life: 1 });
+  }
+}
+
+// Which of the six moves are ready right now (bit per slot, Z X C A S V), for the HUD.
+export function readyMask(p) {
+  const kit = KITS[p.type];
+  let m = 0;
+  SLOTS.forEach((s, k) => {
+    const mv = kit && kit[s];
+    if (!mv || (p.cd && p.cd[s] > 0)) return;
+    if (s === 'ultimate' ? p.ult >= 100 : p.energy >= (mv.cost || 0)) m |= 1 << k;
+  });
+  return m;
+}
+
+// ---------- X orbs ----------
+const orbCount = (t) => 1 + Math.min(2, Math.floor(t / ORB_EVERY));
+
+// Orbs circling the bender: each a small blob of its element. rock: cells to draw for earth.
+function drawOrbs(c, n, age, rock = null) {
+  const p = c.p, [cx, cy] = c.center, type = p.type;
+  for (let k = 0; k < n; k++) {
+    const a = age * 0.13 + (k * Math.PI * 2) / n;
+    const ox = cx + Math.cos(a) * 9, oy = cy - 2 + Math.sin(a) * 6;
+    if (type === 'fire') {
+      for (let q = 0; q < 4; q++) c.ps.spawn(ox - 0.5 + (q & 1), oy - 0.5 + (q >> 1), 0, 0, EL.FIRE, { ghost: true, gravity: 0, life: 1 }); // 2x2 core
+      for (let q = 0; q < 5; q++) c.ps.spawn(ox + (Math.random() - 0.5) * 2.4, oy + (Math.random() - 0.5) * 2.4, 0, -0.1, EL.FIRE, { ghost: true, gravity: 0, life: 1 });
+      if (Math.random() < 0.3) c.ps.spawn(ox, oy, 0, -0.5, EL.FIRE, { ghost: true, gravity: -0.03, life: 4 });
+    } else if (type === 'earth') {
+      for (let q = 0; q < 7; q++) {
+        const b = q * 2.4, d = q ? 1.3 : 0;
+        c.ps.spawn(ox + Math.cos(b) * d, oy + Math.sin(b) * d, 0, 0, rock && rock.length ? rock[(k * 7 + q) % rock.length] : EL.STONE, { ghost: true, gravity: 0, life: 1 });
+      }
+    } else if (type === 'water') {
+      const dx = Math.cos(a + Math.PI / 2), dy = Math.sin(a + Math.PI / 2) * 0.66; // spear along the orbit
+      for (let q = -2; q <= 2; q++) c.ps.spawn(ox + dx * q, oy + dy * q, 0, 0, q === 2 ? EL.WATER : EL.ICE, { ghost: true, gravity: 0, life: 1 });
+    } else {
+      for (let q = 0; q < 6; q++) {
+        const b = age * 0.6 + q * 1.05, r = q % 2 ? 1.2 : 2.2;
+        c.ps.spawn(ox + Math.cos(b) * r, oy + Math.sin(b) * r, 0, 0, EL.STEAM, { ghost: true, gravity: 0, life: 1 });
+      }
+    }
+  }
+}
+
+function makeOrbs(c, ch, data) {
+  const n = orbCount(ch.t), list = [];
+  for (let k = 0; k < n; k++) list.push(data(k));
+  c.p.orbs = { list, age: ch.t };
+  c.p.cast = { pose: 'palms', t: 6 };
+  emit('orbs', c.p.x);
+}
+
+function orbsOngoing(c) {
+  const p = c.p, o = p.orbs;
+  if (!o) return;
+  o.age++;
+  o.life = (o.life || 0) + 1;
+  if (p.dead || !o.list.length || o.life > ORB_LIFE) { // unused orbs fade away
+    if (o.list.length && !p.dead) for (let q = 0; q < 6; q++) c.ps.spawn(c.center[0], c.center[1], (Math.random() - 0.5) * 2, -Math.random(), p.type === 'fire' ? EL.SMOKE : EL.STEAM, { ghost: true, gravity: -0.02, life: 10 });
+    p.orbs = null;
+    return;
+  }
+  drawOrbs(c, o.list.length, o.age, o.list.flatMap((q) => q.cells || []));
+}
+
+// Throw the next orb along the aim.
+function throwOrb(c) {
+  const p = c.p, o = p.orbs.list.shift(), [ax, ay] = c.aim;
+  // Thrown from just out in front of you (earth from head height, clear of the pit its gathering digs).
+  const [hx, hy] = [c.center[0] + ax * 6, c.center[1] - (p.type === 'earth' ? 7 : 2) + ay * 6]; // stones fly from orbit height
+  c.hand = [hx, hy];
+  if (p.type === 'fire') fireball(c, 11, 4.5, 4);
+  else if (p.type === 'earth') { const n = o.cells.length; rockShot(c, o.cells, 9.5, 2.5 + n / 5, Math.sqrt(n / Math.PI)); }
+  else if (p.type === 'water') {
+    // One solid shard does the hit / freeze / blast; the rest of the spear is a visual trail
+    // (solid followers used to pile up into floating ice walls that blocked the next spear).
+    c.ps.spawn(hx, hy, ax * 12, ay * 12, EL.ICE, { gravity: 0.01, drag: 1, boom: 3 + o.shards / 5 });
+    for (let k = 1; k < o.shards; k++) {
+      c.ps.spawn(hx - ax * k * 0.6, hy - ay * k * 0.6, ax * 12, ay * 12, EL.ICE, { ghost: true, gravity: 0.01, life: 14 });
+    }
+  } else {
+    const [cx, cy] = cannonPos(c);
+    p.cannons.push({ x: cx, y: cy, vx: ax * 9, vy: ay * 9, r: 2.8, power: 0.5, life: 50, orb: true });
+  }
+  p.vx -= p.facing * 0.45;
+  c.fx.shake(2.5);
+  p.cast = { pose: 'palms', t: 8 };
+  emit(`${p.type}.heavy.release`, p.x);
+  if (!p.orbs.list.length) { p.orbs = null; p.cd.heavy = Math.max(p.cd.heavy || 0, 20); }
+}
+
 // Held move in progress, for the sound loops: { key: 'fire.defense', prog: 0..1 } or null.
 export function channelInfo(type, ch) {
   const m = ch && KITS[type] && KITS[type][ch.slot];
@@ -1468,7 +1460,7 @@ export function channelInfo(type, ch) {
 export function updateAbilities(p, input, world) {
   currentOwner = p.id;
   world.particles.defaultOwner = p.id + 1;
-  if (p.dead) { p.channel = null; p.cast = null; p.rupture = null; p.tsunami = null; p.pillar = null; p.dragon = null; p.step = null; p.tornados = []; p.bolt = null; p.magma = null; p.vacuums = []; p.lance = null; p.cage = null; p.claps = []; p.ascend = null; p.ascended = 0; p.flameHair = false; return; }
+  if (p.dead) { p.channel = null; p.cast = null; p.rupture = null; p.tsunami = null; p.pillar = null; p.dragon = null; p.step = null; p.tornados = []; p.bolt = null; p.magma = null; p.vacuums = []; p.lance = null; p.cage = null; p.claps = []; p.ascend = null; p.ascended = 0; p.flameHair = false; p.orbs = null; p.kicks = null; p.whips = []; return; }
   for (const s of SLOTS) if (p.cd[s] > 0) p.cd[s] -= p.ascended > 0 ? 2 : 1; // ascended: cooldowns run 2x
   if (p.cast && --p.cast.t <= 0) p.cast = null;
   if (p.shield > 0) p.shield--;
@@ -1497,6 +1489,11 @@ export function updateAbilities(p, input, world) {
   const kit = KITS[p.type];
   if (!kit) { regen(p); return; }
 
+  // X orbs: a fresh X press throws one (holding X only charges when you have none).
+  const xPress = !!input.held.heavy && !p.xWasHeld;
+  p.xWasHeld = !!input.held.heavy;
+  if (p.orbs && xPress && !p.channel) throwOrb(c);
+
   if (p.channel) {
     const m = kit[p.channel.slot];
     const ch = p.channel;
@@ -1508,14 +1505,18 @@ export function updateAbilities(p, input, world) {
     } else {
       p.cd[ch.slot] = m.cooldown;
       if (m.release) m.release(c, ch); // (may shorten the cooldown, e.g. a fizzled charge)
-      emit(p.cd[ch.slot] < m.cooldown ? 'fizzle' : `${p.type}.${ch.slot}.release`, p.x);
+      if (!m.quietRelease) emit(p.cd[ch.slot] < m.cooldown ? 'fizzle' : `${p.type}.${ch.slot}.release`, p.x);
       p.channel = null;
     }
     return;
   }
 
+  const sPress = !!input.held.mobility && !p.sWasHeld;
+  p.sWasHeld = !!input.held.mobility;
   for (const s of SLOTS) {
     if (!input.held[s]) continue;
+    if (s === 'mobility' && !sPress) continue; // one press = one jet
+    if (s === 'heavy' && p.orbs) continue;      // X throws orbs while you have them
     const m = kit[s];
     if (!m || p.cd[s] > 0) continue;
     if (m.ready && !m.ready(c)) continue;
@@ -1529,6 +1530,7 @@ export function updateAbilities(p, input, world) {
       const before = p.cast;
       m.cast(c);
       emit(`${p.type}.${s}`, p.x);
+      if (s === 'ultimate') emit(`cine:${p.type}:${p.color || '#e8b04a'}`, p.x); // ultimate cinematic
       p.cd[s] = m.cooldown;
       if (p.cast === before) p.cast = { pose: m.pose, t: m.poseTime }; // unless the move set its own
     }
@@ -1546,9 +1548,186 @@ function spend(p, n) {
 }
 
 // Effects that run on their own for a while after a cast.
+// ---------- fire kick barrage ----------
+const KICK_AT = [0, 7, 14]; // ticks of the three kicks
+function kicksOngoing(c) {
+  const p = c.p, g = c.grid;
+  if (p.kicks) {
+    const k = p.kicks, n = KICK_AT.indexOf(k.t);
+    if (n >= 0) {
+      const big = n === 2, [ax, ay] = k.aim;
+      const [hx, hy] = handFor(p, c.center, k.aim);
+      p.crescents.push({ x: hx, y: hy, ax, ay, R: big ? 6 : 4, life: 11, dmg: big ? 13 : 8, hit: new Set() });
+      p.cast = { pose: big ? 'spin' : n === 0 ? 'slash' : 'slashUp', t: 7 };
+      p.vx += p.facing * (big ? 0.9 : 0.5);
+      for (let q = 0; q < 6; q++) c.ps.spawn(hx, hy, ax * 2 + (Math.random() - 0.5) * 2, ay * 2 + (Math.random() - 0.5) * 2, EL.FIRE, { ghost: true, gravity: -0.05, life: 6 });
+      c.fx.shake(big ? 3 : 1.5);
+      emit(big ? 'kick3' : 'kick', p.x);
+    }
+    if (++k.t > KICK_AT[2]) p.kicks = null;
+  }
+  // Crescents: an arc bowed forward, perpendicular to the flight.
+  p.crescents = p.crescents.filter((cr) => {
+    const px = -cr.ay, py = cr.ax;
+    for (let sub = 0; sub < 2; sub++) {
+      cr.x += cr.ax * 3.5; cr.y += cr.ay * 3.5;
+      for (let s = -1; s <= 1.001; s += 0.25) {
+        const bow = (1 - s * s) * cr.R * 0.6;
+        const X = cr.x + px * s * cr.R + cr.ax * bow, Y = cr.y + py * s * cr.R + cr.ay * bow;
+        const xi = Math.floor(X), yi = Math.floor(Y);
+        if (!g.inBounds(xi, yi)) continue;
+        const i = yi * g.w + xi, t = g.type[i], kind = KIND[t];
+        if (kind === Kind.STATIC && t !== EL.WOOD && t !== EL.PLANT) { // rock: the crescent bursts
+          explode(c.world, X, Y, cr.R * 0.6, EL.FIRE, false, true, p.id);
+          return false;
+        }
+        if (t === EL.WOOD || t === EL.PLANT) g.temp[i] += 500;          // cut + ignite
+        else if (kind === Kind.POWDER && Math.random() < 0.4) c.ps.lift(xi, yi, cr.ax * 3, cr.ay * 3 - 1, { bounces: 1 });
+        else if (t === 0 && Math.random() < 0.08) g.set(xi, yi, EL.FIRE);
+        const v = bodyAt(c.world, X, Y, p.id, 3);
+        if (v && !cr.hit.has(v)) {
+          cr.hit.add(v);
+          hurt(c.world, v, cr.dmg, p.id);
+          v.vx += cr.ax * 1.6; v.vy += cr.ay * 1.2 - 0.7;
+        }
+      }
+    }
+    for (let s = -1; s <= 1.001; s += 0.12) { // draw: bright edge + flickering trail
+      const bow = (1 - s * s) * cr.R * 0.6;
+      const X = cr.x + px * s * cr.R + cr.ax * bow, Y = cr.y + py * s * cr.R + cr.ay * bow;
+      c.ps.spawn(X, Y, 0, 0, EL.FIRE, { ghost: true, gravity: 0, life: 1 });
+      if (Math.random() < 0.5) c.ps.spawn(X - cr.ax * 2, Y - cr.ay * 2, -cr.ax * 0.5, -cr.ay * 0.5 - 0.2, EL.FIRE, { ghost: true, gravity: -0.03, life: 3 });
+    }
+    return --cr.life > 0;
+  });
+}
+
+// ---------- water whip ----------
+// The whip extends over 6 ticks, cracks, and pulls back over 5. Its body is a wave along the aim
+// that tightens toward the tip; it hits each enemy once per lash.
+const WHIP_LEN = 46;
+function whipsOngoing(c) {
+  const p = c.p, g = c.grid;
+  if (p.whipCombo > 0) p.whipCombo--;
+  if (p.whipLock > 0) p.whipLock--;
+  p.whips = p.whips.filter((w) => {
+    const ext = w.t <= 6 ? w.t / 6 : Math.max(0, 1 - (w.t - 6) / 5), len = WHIP_LEN * Math.pow(ext, 0.7);
+    const [ax, ay] = w.aim, nx = -ay, ny = ax;
+    const [hx, hy] = handFor(p, c.center, w.aim);
+    const dir = w.second ? -1 : 1;
+    for (let d = 2; d < len; d += 0.8) {
+      const k = d / WHIP_LEN, wave = Math.sin(k * 7 - w.t * 1.3) * (1 - k) * 4 * dir * (1 - ext * 0.5);
+      const X = hx + ax * d + nx * wave, Y = hy + ay * d + ny * wave;
+      const tip = d > len - 3;
+      c.ps.spawn(X, Y, 0, 0, tip || (d | 0) % 5 === 0 ? EL.ICE : EL.WATER, { ghost: true, gravity: 0, life: 1 });
+      if (k < 0.6) c.ps.spawn(X + nx, Y + ny, 0, 0, EL.WATER, { ghost: true, gravity: 0, life: 1 }); // thicker near the hand
+      const xi = Math.floor(X), yi = Math.floor(Y);
+      if (g.inBounds(xi, yi)) { // puts out fire it touches
+        const i = yi * g.w + xi, t = g.type[i];
+        if (t === EL.FIRE) g.transform(i, EL.STEAM);
+        else if (IGNITE_T[t] !== Infinity && g.life[i] > 0) { g.life[i] = 0; g.temp[i] = 20; }
+      }
+      if (w.t >= 2 && w.t <= 7) {
+        const v = bodyAt(c.world, X, Y, p.id, 2);
+        if (v && !w.hit.has(v)) {
+          w.hit.add(v);
+          hurt(c.world, v, w.second ? 12 : 11, p.id);
+          if (w.second) { // yank toward the bender
+            const sd = Math.sign(p.x - v.x) || -p.facing;
+            v.vx = sd * 2.4; v.vy = -1.1;
+          } else { v.vx = ax * 0.4; v.vy = Math.min(v.vy, -0.3); v.stunT = Math.max(v.stunT || 0, 15); } // stagger: sets up lash 2
+          for (let q = 0; q < 6; q++) c.ps.spawn(X, Y, (Math.random() - 0.5) * 2, -Math.random() * 1.5, EL.WATER, { ghost: true, gravity: 0.1, life: 12 });
+        }
+      }
+    }
+    if (w.t === 6) { c.fx.shake(1.5); emit('crack', p.x); }
+    return ++w.t <= 11;
+  });
+}
+
+// ---------- water bubble trap ----------
+function popBubble(c, v, as = EL.WATER) {
+  const cx = v.x + BW / 2, cy = v.y + BH / 2;
+  for (let k = 0; k < 18; k++) {
+    const a = (k / 18) * Math.PI * 2;
+    c.ps.spawn(cx + Math.cos(a) * 4, cy + Math.sin(a) * 6, Math.cos(a) * 1.5, Math.sin(a) * 1.5 - 0.5, as,
+      as === EL.ICE ? { ghost: true, gravity: 0, life: 10 } : { bounces: 0 });
+  }
+  v.bubble = null;
+  emit('pop', v.x);
+}
+function bubblesOngoing(c) {
+  const p = c.p, g = c.grid;
+  // Orbs in flight.
+  p.bubbles = p.bubbles.filter((b) => {
+    for (let sub = 0; sub < 2; sub++) {
+      b.x += b.vx / 2; b.y += b.vy / 2;
+      const v = bodyAt(c.world, b.x, b.y, p.id, 5);
+      if (v && !(v.team !== null && v.team === p.team) && v.invulnT <= 0 && !v.bubble) {
+        v.bubble = { t: 120, by: p.id };
+        emit('trap', v.x);
+        return false;
+      }
+      const t = g.get(Math.floor(b.x), Math.floor(b.y));
+      if (t !== 0 && t !== EL.WATER && KIND[t] !== Kind.GAS) { // splash on whatever it hits
+        for (let k = 0; k < 10; k++) c.ps.spawn(b.x - b.vx, b.y - b.vy, (Math.random() - 0.5) * 2, -Math.random() * 1.5, EL.WATER, { bounces: 0 });
+        emit('pop', b.x);
+        return false;
+      }
+    }
+    for (let k = 0; k < 14; k++) { // the orb: a wobbling ring with a bright glint
+      const a = (k / 14) * Math.PI * 2 + b.life * 0.2, r = 3 + Math.sin(b.life * 0.5 + k) * 0.4;
+      c.ps.spawn(b.x + Math.cos(a) * r, b.y + Math.sin(a) * r, 0, 0, EL.WATER, { ghost: true, gravity: 0, life: 1 });
+    }
+    c.ps.spawn(b.x - 1, b.y - 1, 0, 0, EL.ICE, { ghost: true, gravity: 0, life: 1 });
+    if (--b.life <= 0) { for (let k = 0; k < 8; k++) c.ps.spawn(b.x, b.y, (Math.random() - 0.5) * 2, -Math.random(), EL.WATER, { bounces: 0 }); return false; }
+    return true;
+  });
+  // Enemies trapped by this bender: float up helplessly, slowly drowning.
+  for (const v of c.world.players || []) {
+    const bb = v.bubble;
+    if (!bb || bb.by !== p.id) continue;
+    if (v.dead) { v.bubble = null; continue; }
+    v.stunT = Math.max(v.stunT || 0, 2);
+    v.vx *= 0.7;
+    v.vy = Math.max(v.vy * 0.5 - 0.12, -0.35);
+    hurt(c.world, v, 0.12, p.id);
+    const cx = v.x + BW / 2, cy = v.y + BH / 2;
+    for (let k = 0; k < 44; k++) { // the bubble: a dense wobbling shell + a faint shimmer inside
+      const a = (k / 44) * Math.PI * 2 + bb.t * 0.08, w = Math.sin(bb.t * 0.3 + k * 0.7) * 0.5;
+      c.ps.spawn(cx + Math.cos(a) * (5.5 + w), cy + Math.sin(a) * (8 + w), 0, 0, k % 7 ? EL.WATER : EL.ICE, { ghost: true, gravity: 0, life: 1 });
+    }
+    for (let k = 0; k < 5; k++) c.ps.spawn(cx + (Math.random() - 0.5) * 8, cy + (Math.random() - 0.5) * 13, 0, 0, EL.WATER, { ghost: true, gravity: 0, life: 1 });
+    if (bb.t % 10 === 0) c.ps.spawn(cx + (Math.random() - 0.5) * 4, cy - 2, 0, -0.4, EL.ICE, { ghost: true, gravity: 0, life: 8 }); // air bubbles
+    if (--bb.t <= 0) popBubble(c, v);
+  }
+}
+
+// ---------- jets (every bender's S, held) ----------
+// Velocity eases toward speed x the 8-way aim (forward when no arrows are held), so turns and
+// starts feel smooth; the body ignores gravity while jetting; letting go keeps the momentum.
+function startJet(c, ch) { ch.vx = c.p.vx; ch.vy = c.p.vy; }
+function jet(c, ch, speed) {
+  const p = c.p, [ax, ay] = c.aim;
+  ch.vx += (ax * speed - ch.vx) * 0.2;
+  ch.vy += (ay * speed - ch.vy) * 0.2;
+  p.dashT = 2; p.dashVX = ch.vx; p.dashVY = ch.vy;
+  if (ax) p.facing = Math.sign(ax);
+  p.cast = { pose: ay < -0.7 && Math.abs(ax) < 0.3 ? 'sky' : 'dash', t: 2 };
+}
+function endJet(c, ch) {
+  const p = c.p;
+  p.dashT = 0; p.surfT = 0;
+  p.vx = (ch.vx || 0) * 0.85; p.vy = (ch.vy || 0) * 0.85;
+}
+
 function ongoing(c) {
   const p = c.p, g = c.grid;
   airOngoing(c);
+  orbsOngoing(c);
+  kicksOngoing(c);
+  bubblesOngoing(c);
+  whipsOngoing(c);
   zOngoing(c);
   ascendOngoing(c);
   aOngoing(c);
@@ -1588,7 +1767,8 @@ function ongoing(c) {
     const fx = p.x + BW / 2, fy = p.y + BH - 1;
     for (let k = 0; k < 5; k++) {
       c.ps.spawn(fx - p.facing * (2 + Math.random() * 2), fy - Math.random() * 2,
-        -p.facing * (0.6 + Math.random() * 1.6), -1.5 - Math.random() * 1.8, EL.SAND, { bounces: 1 });
+        -p.facing * (0.6 + Math.random() * 1.6), -1.5 - Math.random() * 1.8, EL.SAND,
+        k < 2 ? { bounces: 1 } : { ghost: true, gravity: 0.15, life: 8 });
     }
     for (let dy = 0; dy < BH; dy++) {
       const X = Math.floor(fx + p.facing * 3), Y = Math.floor(p.y + dy);
@@ -1602,9 +1782,10 @@ function ongoing(c) {
   if (jetting) {
     const l = Math.hypot(p.dashVX, p.dashVY) || 1, bx = -p.dashVX / l, by = -p.dashVY / l;
     const [cx] = c.center, fy = p.y + BH - 2;
-    for (let k = 0; k < 6; k++) {
+    for (let k = 0; k < 6; k++) { // 2 real cells per tick (a held jet would flood the map), the rest spray
       const sp = 5 + Math.random() * 2.5, j = (Math.random() - 0.5) * 0.5;
-      c.ps.spawn(cx + bx * 2, fy + by * 2, (bx + j * by) * sp, (by - j * bx) * sp, p.jetType, { bounces: p.jetType === EL.SAND ? 1 : 0, dmg: 0.1 });
+      c.ps.spawn(cx + bx * 2, fy + by * 2, (bx + j * by) * sp, (by - j * bx) * sp, p.jetType,
+        k < 2 ? { bounces: p.jetType === EL.SAND ? 1 : 0, dmg: 0.1 } : { ghost: true, gravity: 0.1, drag: 0.9, life: 6 });
     }
   }
 

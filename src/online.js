@@ -5,6 +5,7 @@
 // 'snap' (compressed binary snapshots). Both reliable + ordered: snapshots are diffs.
 import { hostRoom, joinRoom } from './signal.js';
 import { SnapEncoder, cellCodes, windCodes, pack, unpack, inputBits, playerVisual } from './net.js';
+import { readyMask } from './abilities.js';
 
 export const MAX_PLAYERS = 4;
 const SNAP_BACKLOG = 1 << 20; // skip a snapshot for a guest whose connection is this far behind
@@ -19,6 +20,7 @@ export class HostSession {
     this.hooks = hooks;
     this.guests = [];   // { id, name, type, team, pc, ctl, snap, enc, input: { bits, jumps }, busy, gone }
     this.me = { name: 'Host', type: 'fire', team: 0 };
+    this.bots = [];     // { name, type, team, level } CPU fighters the host added
     this.cfg = { format: 'ffa', win: 'kos', map: 'random', customKey: 'off' };
     this.inMatch = false;
     this.room = null;
@@ -50,7 +52,7 @@ export class HostSession {
   admit(g) {
     if (g.admitted) return;
     g.admitted = true;
-    if (this.inMatch || this.guests.length + 1 >= MAX_PLAYERS) {
+    if (this.inMatch || this.guests.length + this.bots.length + 1 >= MAX_PLAYERS) {
       sendJSON(g.ctl, { k: 'closed', why: this.inMatch ? 'That match has already started' : 'Room is full (4 players)' });
       setTimeout(() => g.pc.close(), 500);
       return;
@@ -83,8 +85,25 @@ export class HostSession {
   lobby() {
     return {
       code: this.room?.code, cfg: this.cfg,
-      players: [{ ...this.me, host: true }, ...this.guests.filter((g) => !g.gone).map((g) => ({ name: g.name, type: g.type, team: g.team }))],
+      players: [{ ...this.me, host: true }, ...this.guests.filter((g) => !g.gone).map((g) => ({ name: g.name, type: g.type, team: g.team })),
+        ...this.bots.map((b) => ({ name: b.name, type: b.type, team: b.team, cpu: b.level }))],
     };
+  }
+
+  // Lobby slot k (0 = host, then guests, then bots) -> edit / add (k = -1) / remove (change = null) a CPU.
+  editBot(k, change) {
+    const live = this.guests.filter((g) => !g.gone).length;
+    if (k < 0) {
+      if (1 + live + this.bots.length >= MAX_PLAYERS) return;
+      const taken = new Set([this.me.type, ...this.guests.map((g) => g.type), ...this.bots.map((b) => b.type)]);
+      const type = ['earth', 'air', 'water', 'fire'].find((t) => !taken.has(t)) || 'earth';
+      this.bots.push({ name: `CPU ${this.bots.length + 1}`, type, team: (live + this.bots.length) % 2 === 0 ? 1 : 0, level: 'normal' });
+    } else {
+      const i = k - 1 - live;
+      if (!this.bots[i]) return;
+      if (change === null) this.bots.splice(i, 1); else Object.assign(this.bots[i], change);
+    }
+    this.lobbyChanged();
   }
 
   lobbyChanged() {
@@ -99,6 +118,7 @@ export class HostSession {
     return [
       { name: this.me.name, type: this.me.type, team: this.me.team, source: 'local' },
       ...live.map((g) => ({ name: g.name, type: g.type, team: g.team, source: 'net', net: g.input })),
+      ...this.bots.map((b) => ({ name: b.name, type: b.type, team: b.team, source: 'cpu-' + b.level })),
     ];
   }
 
@@ -120,7 +140,7 @@ export class HostSession {
 
   sendResults(result) {
     const r = {
-      winner: result.winner ? { name: result.winner.name, color: result.winner.color } : null,
+      winner: result.winner ? { name: result.winner.name, color: result.winner.color, type: result.winner.players[0] && result.winner.players[0].type } : null,
       sides: result.sides.map((s) => ({ players: s.players.map((p) => ({ name: p.name, type: p.type, kos: p.kos, deaths: p.deaths, color: p.color })) })),
     };
     for (const g of this.guests) sendJSON(g.ctl, { k: 'results', result: r });
@@ -137,7 +157,7 @@ export class HostSession {
       h: {
         clock: match.clockText(), cd: match.countdown, over: match.over, t: match.t, lives: !!match.win.lives,
         feed: match.feed.slice(-5).map((f) => ({ text: f.text, color: f.color })),
-        players: match.players.map((p) => ({ name: p.name, color: p.color, out: p.out, lives: p.lives, kos: p.kos, type: p.type })),
+        players: match.players.map((p) => ({ name: p.name, color: p.color, out: p.out, lives: p.lives, kos: p.kos, type: p.type, rd: p.dead ? 0 : readyMask(p), orbN: p.orbs ? p.orbs.list.length : 0 })),
       },
       fx, paused: fx.paused, s: sounds,
     };

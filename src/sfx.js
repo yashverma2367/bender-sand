@@ -222,6 +222,17 @@ const RECIPES = {
     noise(p, { dur: 0.15, ft: 'highpass', f: 3000, vol: 0.4 });
     noise(p, { dur: 1.8, f: 600, f2: 50, vol: 0.55, at: 0.05, a: 0.05 });
   },
+  kick: (p) => { noise(p, { dur: 0.16, ft: 'bandpass', f: 600, f2: 2600, q: 0.8, vol: 0.32 }); noise(p, { dur: 0.22, ft: 'bandpass', f: 900, f2: 400, q: 0.6, vol: 0.18, at: 0.03 }); },
+  kick3: (p) => { noise(p, { dur: 0.3, ft: 'bandpass', f: 400, f2: 3000, q: 0.7, vol: 0.4 }); tone(p, { f: 140, f2: 60, dur: 0.2, type: 'sawtooth', vol: 0.12 }); noise(p, { dur: 0.35, ft: 'bandpass', f: 1200, f2: 300, q: 0.5, vol: 0.2, at: 0.05 }); },
+  'water.special': (p) => { tone(p, { f: 260, f2: 620, dur: 0.12, vol: 0.18 }); noise(p, { dur: 0.15, ft: 'bandpass', f: 900, f2: 1600, q: 2, vol: 0.12 }); },
+  trap: (p) => { tone(p, { f: 180, f2: 520, dur: 0.25, vol: 0.22 }); tone(p, { f: 520, f2: 300, dur: 0.3, type: 'triangle', vol: 0.08, at: 0.1 }); noise(p, { dur: 0.3, ft: 'bandpass', f: 700, f2: 300, q: 1.5, vol: 0.2 }); },
+  pop: (p) => { tone(p, { f: 900, f2: 200, dur: 0.07, vol: 0.2 }); noise(p, { dur: 0.25, ft: 'bandpass', f: 1500, f2: 500, q: 0.9, vol: 0.25 }); },
+  combo: (p) => { [880, 1175, 1568].forEach((f, k) => tone(p, { f, dur: 0.18, type: 'square', vol: 0.06, at: k * 0.06 })); },
+  orbs: (p) => { tone(p, { f: 330, f2: 660, dur: 0.12, type: 'triangle', vol: 0.07 }); noise(p, { dur: 0.18, ft: 'bandpass', f: 900, f2: 2000, q: 1.2, vol: 0.12 }); },
+  ultcine: () => { noise(0, { dur: 0.5, ft: 'bandpass', f: 300, f2: 4000, q: 0.7, vol: 0.35, a: 0.05 }); tone(0, { f: 110, f2: 55, dur: 0.6, type: 'sawtooth', vol: 0.12 }); tone(0, { f: 880, f2: 1760, dur: 0.25, type: 'square', vol: 0.05, at: 0.08 }); },
+  crack: (p) => { noise(p, { dur: 0.05, ft: 'highpass', f: 3500, vol: 0.4 }); noise(p, { dur: 0.22, ft: 'bandpass', f: 1400, f2: 500, q: 1, vol: 0.2, at: 0.02 }); },
+  'water.basic': (p) => noise(p, { dur: 0.15, ft: 'bandpass', f: 700, f2: 2200, q: 1.1, vol: 0.18 }),
+  shatter: (p) => { noise(p, { dur: 0.35, ft: 'highpass', f: 5000, f2: 2500, vol: 0.4 }); [2637, 3136, 3951].forEach((f, k) => tone(p, { f, f2: f * 0.9, dur: 0.25, type: 'triangle', vol: 0.06, at: k * 0.02 })); },
   fizzle: (p) => { tone(p, { f: 500, f2: 90, dur: 0.25, type: 'square', vol: 0.08 }); noise(p, { dur: 0.25, ft: 'highpass', f: 4000, f2: 1500, vol: 0.08 }); },
 
   // countdown / UI
@@ -313,13 +324,14 @@ export const activeLoops = () => [...loops.keys()];
 // spec: noise or oscillator source, filter / pitch moving with charge progress (0..1).
 const LOOPS = {
   'fire.heavy': { osc: 'square', f: [80, 260], ft: 'lowpass', ff: [400, 1400], vol: 0.07 },
-  'fire.special': { noise: true, ft: 'bandpass', ff: [700, 700], q: 0.6, vol: 0.3, trem: 13 },
   'fire.defense': { osc: 'sawtooth', f: [70, 520], ft: 'lowpass', ff: [300, 3000], vol: 0.09, trem: 9 },
   'earth.heavy': { noise: true, ft: 'lowpass', ff: [160, 320], vol: 0.35, trem: 7 },
-  'water.basic': { osc: 'sine', f: [660, 660], vol: 0.05, trem: 5 },
   'water.heavy': { osc: 'triangle', f: [500, 1300], vol: 0.06 },
-  'water.special': { noise: true, ft: 'bandpass', ff: [2200, 2200], q: 1.2, vol: 0.22 },
   'air.heavy': { noise: true, ft: 'bandpass', ff: [300, 1500], q: 2, vol: 0.25 },
+  'fire.mobility': { noise: true, ft: 'bandpass', ff: [550, 550], q: 0.6, vol: 0.28, trem: 15 },
+  'water.mobility': { noise: true, ft: 'bandpass', ff: [1900, 1900], q: 1.1, vol: 0.2 },
+  'earth.mobility': { noise: true, ft: 'bandpass', ff: [1300, 1300], q: 0.5, vol: 0.18, trem: 9 },
+  'air.mobility': { noise: true, ft: 'bandpass', ff: [700, 700], q: 1.4, vol: 0.22, trem: 4 },
   'air.defense': { osc: 'triangle', f: [180, 1200], ft: 'lowpass', ff: [800, 4000], vol: 0.07, trem: 11, noise2: true },
 };
 const loops = new Map(); // player key -> { key, nodes, gain, pan, ... }
@@ -373,4 +385,27 @@ export function updateLoops(list) {
     if (l.fl) l.fl.frequency.setTargetAtTime(s.ff[0] + (s.ff[1] - s.ff[0]) * k, now, 0.03);
   }
   for (const [id, l] of loops) if (!seen.has(id)) { stopLoop(l); loops.delete(id); }
+}
+
+// ---------- shared audio access (music.js) ----------
+export function audioOut() { return ctx && ctx.state === 'running' && !muted ? { ctx, master, noiseBuf } : null; }
+
+// ---------- map ambience ----------
+const AMBIENT = {
+  volcano: { noise: true, ft: 'lowpass', ff: [140, 140], vol: 0.3, trem: 0.35 },     // lava rumble
+  sky: { noise: true, ft: 'bandpass', ff: [450, 450], q: 0.7, vol: 0.14, trem: 0.15 }, // high wind
+  forest: { noise: true, ft: 'highpass', ff: [3500, 3500], vol: 0.07, trem: 0.4 },     // rain
+  cove: { noise: true, ft: 'lowpass', ff: [480, 480], vol: 0.18, trem: 0.11 },         // waves
+  desert: { noise: true, ft: 'bandpass', ff: [800, 800], q: 0.8, vol: 0.09, trem: 0.2 }, // dry wind
+  glacier: { noise: true, ft: 'bandpass', ff: [1500, 1500], q: 2, vol: 0.06, trem: 0.12 }, // icy wind
+};
+let ambId = null, amb = null;
+// Call every frame with the current map id (or null): starts / swaps / stops the ambient loop.
+export const ambientId = () => ambId; // (debug / tests)
+export function ambient(id) {
+  if (muted || !ctx || ctx.state !== 'running') id = null;
+  if (id === ambId) return;
+  if (amb) { stopLoop(amb); amb = null; }
+  ambId = id;
+  if (id && AMBIENT[id]) amb = startLoop(AMBIENT[id]);
 }
