@@ -107,11 +107,16 @@ export function initAbilities(p) {
 // Fire blasts also fill empty space with flame; rock blasts leave a little rubble.
 // Every blast breaks solid blocks near its center; breakStatic (big blasts) breaks deeper,
 // including obsidian.
-export function explode(world, x, y, r, type, breakStatic = false, knockPlayer = true, owner = currentOwner) {
+// Blasts are drawn / dig / reach BLAST_SCALE x their nominal radius (the city map is big, so
+// attacks need to read big); damage amounts still come from the nominal radius.
+const BLAST_SCALE = 1.6;
+export function explode(world, x, y, r0, type, breakStatic = false, knockPlayer = true, owner = currentOwner) {
   const { grid: g, particles: ps, fx } = world;
-  if (r >= 5) emit('boom', x, r); else emit('boom', x, r, 'smallboom', 60);
+  if (r0 >= 5) emit('boom', x, r0); else emit('boom', x, r0, 'smallboom', 60);
+  const r = r0 * BLAST_SCALE;
+  breakStatic = breakStatic || r0 >= 4; // anything bigger than a pebble shot breaks walls
   const cx = Math.floor(x), cy = Math.floor(y), R = Math.ceil(r);
-  const force = 2.5 + r * 0.9;
+  const force = 2.5 + r0 * 1.1;
   const heat = type === EL.FIRE || type === EL.LAVA ? 450 : 0;
   for (let dy = -R; dy <= R; dy++) {
     for (let dx = -R; dx <= R; dx++) {
@@ -131,7 +136,8 @@ export function explode(world, x, y, r, type, breakStatic = false, knockPlayer =
       const loose = kind === Kind.POWDER || kind === Kind.LIQUID;
       // Solid blocks: every blast chips out its inner part; big blasts (breakStatic) dig deeper and
       // can break obsidian too.
-      const smash = kind === Kind.STATIC && (breakStatic ? d < r * 0.8 : t !== EL.OBSIDIAN && t !== EL.STEEL && d < r * 0.55); // steel only bends to big blasts
+      const smash = kind === Kind.STATIC && (t === EL.STEEL ? r0 >= 8 && d < r * 0.6 // steel only gives to huge blasts
+        : breakStatic ? d < r * 0.9 : t !== EL.OBSIDIAN && d < r * 0.7);
       if (smash && CRUMBLE[t]) g.type[i] = CRUMBLE[t]; // broken rock crumbles into rubble (sand)
       if ((loose && Math.random() < 0.85) || smash) {
         const nx = d ? dx / d : 0, ny = d ? dy / d : -1, sp = force * k * (0.6 + Math.random() * 0.7);
@@ -141,7 +147,7 @@ export function explode(world, x, y, r, type, breakStatic = false, knockPlayer =
   }
   // Knock the player away from the blast (fireball at your own feet = rocket jump).
   // Blast damage to everyone but the attacker, scaled by blast size.
-  damageArea(world, x, y, r, 6 + r * 2.2, owner);
+  damageArea(world, x, y, r, 6 + r0 * 2.2, owner);
   if (type === EL.ICE) { // ice shots pin whoever they catch: frozen in place for 0.4 s
     const own = (world.players || []).find((q) => q && q.id === owner);
     for (const pl of world.players || []) {
@@ -168,7 +174,7 @@ export function explode(world, x, y, r, type, breakStatic = false, knockPlayer =
   if (EARTHY.has(type) && centerEmpty) g.set(cx, cy, EL.SAND);
   if (type === EL.WATER && centerEmpty) g.set(cx, cy, EL.WATER);
   if (type === EL.ICE) { freezeArea(g, x, y, r + 2); if (centerEmpty) { g.set(cx, cy, EL.ICE); g.temp[cy * g.w + cx] = -40; } }
-  fx.shake(Math.min(10, r * 0.9));
+  fx.shake(Math.min(12, r * 0.8));
 }
 
 // What solid blocks turn into when a blast breaks them (so holes stay open instead of the
@@ -291,7 +297,7 @@ const KITS = {
       cast(c) {
         const p = c.p, x = Math.floor(c.center[0] + p.facing * 16);
         const base = groundBelow(c.grid, x, p.y) > 0 ? groundBelow(c.grid, x, p.y) : Math.floor(p.y + BH);
-        spawnWall({ el: 'fire', name: 'Flame Wall', x, base, h: 30, pow: 40, owner: p.id, team: p.team, life: 180 });
+        spawnWall({ el: 'fire', name: 'Flame Wall', x, base, h: 44, pow: 40, owner: p.id, team: p.team, life: 180 });
         c.fx.shake(3);
       },
     },
@@ -363,7 +369,7 @@ const KITS = {
         const x = Math.floor(c.p.x + BW / 2 + (under ? 0 : c.p.facing * 14));
         const gy = groundBelow(c.grid, x, c.p.y + BH - 3);
         if (gy < 0) return;
-        c.p.pillar = { x, base: gy, h: 0, max: 26, launch: under ? 3.3 : 0 }; // 5 wide, 26 tall: taller than a bender
+        c.p.pillar = { x, base: gy, h: 0, max: 38, launch: under ? 3.8 : 0 }; // 5 wide, 38 tall: twice a bender
         c.fx.shake(3);
       },
     },
@@ -405,7 +411,7 @@ const KITS = {
       cast(c) {
         const p = c.p, v = nearestEnemy(c, 260);
         const cx = Math.floor(v ? v.x + BW / 2 : c.center[0] + p.facing * 80);
-        p.rift = { t: 0, cx, half: 32, depth: 32, tops: {}, y0: Math.floor((v || p).y) };
+        p.rift = { t: 0, cx, half: 48, depth: 44, tops: {}, y0: Math.floor((v || p).y) };
         c.fx.shake(6);
       },
     },
@@ -493,7 +499,7 @@ const KITS = {
         const [ax, ay] = c.aim, under = ax === 0 && ay > 0;
         const x = under ? c.center[0] : c.center[0] + ax * 14;
         const y = under ? c.p.y + BH : ay < 0 ? c.center[1] + ay * 10 : c.p.y + BH;
-        c.p.tornados.push({ x, y, vx: under ? 0 : ax * 0.9, vy: under ? 0 : ay * 0.9, ground: ay === 0 || under, t: 0, life: 240, h: 54 });
+        c.p.tornados.push({ x, y, vx: under ? 0 : ax * 0.9, vy: under ? 0 : ay * 0.9, ground: ay === 0 || under, t: 0, life: 240, h: 80 });
         c.fx.shake(3);
       },
     },
@@ -539,7 +545,7 @@ const TSUNAMI_TAG = 7;
 function sonicBoom(c, aim) {
   const g = c.grid, ps = c.ps, p = c.p, [ax, ay] = aim, base = Math.atan2(ay, ax);
   const hx = c.center[0] + ax * 5, hy = c.center[1] - 2 + ay * 5;
-  const R = 50, HALF = 0.5;
+  const R = 75, HALF = 0.55;
   // Everything in the cone: solids are pulverized to powder (stone / glass / obsidian -> sand,
   // wood / plants -> ash), then the whole lot is blown away, hardest up close.
   for (let Y = Math.floor(hy - R); Y <= hy + R; Y++) {
@@ -618,7 +624,7 @@ function airOngoing(c) {
     if (b.dead) return false; // lost a clash
     b.t++;
     const sp = Math.hypot(b.vx, b.vy), dx = b.vx / sp, dy = b.vy / sp, px = -dy, py = dx;
-    const R = 6 + Math.min(1, b.t / 12) * 9; // grows as it flies
+    const R = 9 + Math.min(1, b.t / 12) * 13; // grows as it flies
     const arc = (th) => [b.x + dx * (Math.cos(th) - 1) * R * 0.6 + px * Math.sin(th) * R,
                          b.y + dy * (Math.cos(th) - 1) * R * 0.6 + py * Math.sin(th) * R];
     const steps = Math.ceil(sp);
@@ -1341,7 +1347,7 @@ function spend(p, n) {
 
 // Effects that run on their own for a while after a cast.
 // ---------- fire stomp ----------
-const STOMP_SPEED = 3.6, STOMP_TICKS = 14, STOMP_DMG = 12;
+const STOMP_SPEED = 4.6, STOMP_TICKS = 16, STOMP_DMG = 12;
 function stomp(c) {
   const p = c.p, x = c.center[0], feet = p.y + BH;
   for (const dir of [-1, 1]) p.stompWaves.push({ x: x + dir * 3, y: feet, dir, t: 0, hit: new Set() });
@@ -1367,7 +1373,7 @@ function stompOngoing(c) {
     const gy = groundBelow(g, X, w.y - 8); // hug the ground: up small steps, down slopes
     if (gy < 0 || gy > w.y + 10) return false; // ran off a ledge
     w.y = gy;
-    const k = 1 - w.t / STOMP_TICKS, hgt = 3 + 5 * k; // the crest shrinks as it travels
+    const k = 1 - w.t / STOMP_TICKS, hgt = 5 + 9 * k; // the crest shrinks as it travels
     for (let q = 0; q < 10; q++) { // a crest of flame + flung dirt
       const ox = (Math.random() - 0.5) * 4, oy = -Math.random() * hgt;
       c.ps.spawn(w.x + ox, gy + oy, w.dir * 0.6, -0.6 - Math.random(), q < 7 ? EL.FIRE : EL.SAND, { ghost: true, gravity: 0.05, life: 4 + Math.random() * 4 });
@@ -1403,7 +1409,7 @@ function bulletsOngoing(c) {
 }
 
 // ---------- tidal wave ----------
-const TIDE_SPEED = 2.8, TIDE_TICKS = 45, TIDE_H = 24, TIDE_LEN = 16, TIDE_MAXVOL = 900;
+const TIDE_SPEED = 3.2, TIDE_TICKS = 50, TIDE_H = 34, TIDE_LEN = 24, TIDE_MAXVOL = 1600;
 // The wave's size grows with the water it carries: 0 cells = normal, 360+ = 2.2x.
 const tideScale = (vol) => 1 + Math.min(1.2, vol / 300);
 

@@ -30,6 +30,8 @@ const ADV = {
 export const advantage = (a, b) => (ADV[a] && ADV[a][b]) || 1;
 export const ELEMENT_COLORS = { sand: '#e8c070', fire: '#ff7a2a', water: '#4ea8ff', earth: '#b08850', air: '#cfe8ff', ice: '#bfefff', lava: '#ff4a1a', lightning: '#f5f07a', sonic: '#e0d0ff' };
 
+const PROJ_SCALE = 1.4;
+
 // ---------- registry ----------
 export const projectiles = []; // native projectile objects
 export const walls = [];       // standing walls (Flame Wall)
@@ -56,6 +58,7 @@ const STYLE = {
 // o: { el, x, y, vx, vy, pow, r, boomR, gravity, owner, team, name, life, cells (earth), dmgScale }
 export function spawnProjectile(o) {
   const p = { gravity: 0, life: 120, r: 3, boomR: 4.5, name: o.el, ...o, alive: true, age: 0 };
+  p.r *= PROJ_SCALE; // bigger shots for the big map (collision + look)
   p.pow0 = p.pow;
   projectiles.push(p);
   return p;
