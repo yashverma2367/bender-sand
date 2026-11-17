@@ -2,9 +2,13 @@
 // pixel art. The simulation only calls emit(name, x, size); main.js drains the queue each frame,
 // plays it, and (when hosting) forwards the same events to guests inside snapshots.
 // Held moves (charges, streams) are continuous loops driven by each player's channel state.
-// Sounds are panned left/right by where they happen on the map.
+// Sounds are panned left/right by where they happen relative to the camera, and sounds far
+// off-screen are dropped (the map is much bigger than the view).
 
-const MAP_W = 640;
+const MAP_W = 1200;
+let listenX = MAP_W / 2, listenW = MAP_W; // camera center / width (cells)
+export function setListener(x, w) { listenX = x; listenW = w; }
+const GLOBAL = new Set(['train', 'ultcine', 'ko', 'win', 'countdown', 'go']); // heard everywhere
 let ctx = null, master = null, noiseBuf = null;
 let bus = null, impactBus = null, shaper = null; // normal sounds / explosions (bypass ducking + compression)
 let muted = false;
@@ -15,7 +19,7 @@ const lastAt = new Map();  // throttle key -> time (ms)
 
 // ---------- emit (simulation side) ----------
 // throttleMs: drop repeats of the same key within this window (streams hit many times a second).
-export function emit(name, x = MAP_W / 2, size = 1, key = null, throttleMs = 0) {
+export function emit(name, x = listenX, size = 1, key = null, throttleMs = 0) {
   if (key) {
     const now = performance.now();
     if (now - (lastAt.get(key) || 0) < throttleMs) return;
@@ -70,7 +74,7 @@ export function setMuted(m) {
   if (m) stopAllLoops();
 }
 
-const panOf = (x) => Math.max(-0.85, Math.min(0.85, (x / MAP_W) * 2 - 1));
+const panOf = (x) => Math.max(-0.85, Math.min(0.85, ((x - listenX) / (listenW / 2)) * 0.85));
 let voices = 0;
 const MAX_VOICES = 48;
 
@@ -266,6 +270,11 @@ const RECIPES = {
     noise(p, { dur: 1.7, ft: 'bandpass', f: 300, f2: 3000, q: 0.5, vol: 0.3, a: 0.3 });
   },
 
+  train: () => { // subway horn: two-tone, then the rumble of the train
+    for (const [f, at] of [[311, 0], [370, 0], [311, 0.55], [370, 0.55]]) tone(0, { f, f2: f * 0.98, dur: 0.45, type: 'sawtooth', vol: 0.08, at });
+    noise(0, { dur: 2.6, f: 160, f2: 90, vol: 0.35, a: 0.8, at: 0.9 });
+  },
+
   // ---- earth ----
   'earth.basic': (p) => { // earth grip: ground cracks, a stone hand grinds up
     impact(p, 0.25, { crack: 0.6, tail: 0 });
@@ -317,8 +326,9 @@ const RECIPES = {
 };
 
 export const stats = { played: {}, missing: {} }; // debug counters
-export function play(name, x = MAP_W / 2, size = 1) {
+export function play(name, x = listenX, size = 1) {
   if (muted || !ctx || ctx.state !== 'running') return;
+  if (!GLOBAL.has(name) && !name.startsWith('cine') && Math.abs(x - listenX) > listenW * 1.1) return; // far off-screen
   const r = RECIPES[name];
   if (r) { r(panOf(x), size); stats.played[name] = (stats.played[name] || 0) + 1; }
   else stats.missing[name] = (stats.missing[name] || 0) + 1;
@@ -397,12 +407,7 @@ export function audioOut() { return ctx && ctx.state === 'running' && !muted ? {
 
 // ---------- map ambience ----------
 const AMBIENT = {
-  volcano: { noise: true, ft: 'lowpass', ff: [140, 140], vol: 0.3, trem: 0.35 },     // lava rumble
-  sky: { noise: true, ft: 'bandpass', ff: [450, 450], q: 0.7, vol: 0.14, trem: 0.15 }, // high wind
-  forest: { noise: true, ft: 'highpass', ff: [3500, 3500], vol: 0.07, trem: 0.4 },     // rain
-  cove: { noise: true, ft: 'lowpass', ff: [480, 480], vol: 0.18, trem: 0.11 },         // waves
-  desert: { noise: true, ft: 'bandpass', ff: [800, 800], q: 0.8, vol: 0.09, trem: 0.2 }, // dry wind
-  glacier: { noise: true, ft: 'bandpass', ff: [1500, 1500], q: 2, vol: 0.06, trem: 0.12 }, // icy wind
+  city: { noise: true, ft: 'lowpass', ff: [260, 260], vol: 0.12, trem: 0.18 }, // distant traffic hum
 };
 let ambId = null, amb = null;
 // Call every frame with the current map id (or null): starts / swaps / stops the ambient loop.

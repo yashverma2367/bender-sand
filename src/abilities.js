@@ -16,7 +16,7 @@ import { spawnProjectile, spawnWall, register } from './clash.js';
 export const SLOTS = ['basic', 'heavy', 'special', 'defense', 'mobility', 'ultimate'];
 export const SLOT_KEYS = { z: 'basic', x: 'heavy', c: 'special', a: 'defense', s: 'mobility', v: 'ultimate' };
 export const MAX_ENERGY = 175;
-const ENERGY_REGEN = 0.45;     // per tick (~6.5 s from empty)
+const ENERGY_REGEN = 0.3;      // per tick (~10 s from empty)
 const BOOM_WINDUP = 15;        // sonic boom: ticks of wind-up before the shockwave
 const ULT_PER_DAMAGE = 0.5;
 // X orbs: hold X to form up to 3 element orbs that orbit you (one more every ORB_EVERY ticks of
@@ -131,7 +131,7 @@ export function explode(world, x, y, r, type, breakStatic = false, knockPlayer =
       const loose = kind === Kind.POWDER || kind === Kind.LIQUID;
       // Solid blocks: every blast chips out its inner part; big blasts (breakStatic) dig deeper and
       // can break obsidian too.
-      const smash = kind === Kind.STATIC && (breakStatic ? d < r * 0.8 : t !== EL.OBSIDIAN && d < r * 0.55);
+      const smash = kind === Kind.STATIC && (breakStatic ? d < r * 0.8 : t !== EL.OBSIDIAN && t !== EL.STEEL && d < r * 0.55); // steel only bends to big blasts
       if (smash && CRUMBLE[t]) g.type[i] = CRUMBLE[t]; // broken rock crumbles into rubble (sand)
       if ((loose && Math.random() < 0.85) || smash) {
         const nx = d ? dx / d : 0, ny = d ? dy / d : -1, sp = force * k * (0.6 + Math.random() * 0.7);
@@ -173,14 +173,14 @@ export function explode(world, x, y, r, type, breakStatic = false, knockPlayer =
 
 // What solid blocks turn into when a blast breaks them (so holes stay open instead of the
 // pieces settling back as solid rock).
-const CRUMBLE = { [EL.STONE]: EL.SAND, [EL.OBSIDIAN]: EL.SAND, [EL.GLASS]: EL.SAND };
+const CRUMBLE = { [EL.STONE]: EL.SAND, [EL.OBSIDIAN]: EL.SAND, [EL.GLASS]: EL.SAND, [EL.CONCRETE]: EL.SAND, [EL.BRICK]: EL.SAND, [EL.ASPHALT]: EL.SAND };
 // What the sonic clap pulverizes solids into.
-const PULVERIZE = { [EL.STONE]: EL.SAND, [EL.GLASS]: EL.SAND, [EL.OBSIDIAN]: EL.SAND, [EL.WOOD]: EL.ASH, [EL.PLANT]: EL.ASH, [EL.EARTH]: EL.EARTH };
+const PULVERIZE = { [EL.STONE]: EL.SAND, [EL.GLASS]: EL.SAND, [EL.OBSIDIAN]: EL.SAND, [EL.WOOD]: EL.ASH, [EL.PLANT]: EL.ASH, [EL.EARTH]: EL.EARTH, [EL.CONCRETE]: EL.SAND, [EL.BRICK]: EL.SAND, [EL.ASPHALT]: EL.SAND };
 // What the blaze torrent can melt into lava when it's held on one spot (sand turns to glass on its own).
-const MELTS = { [EL.STONE]: 1, [EL.EARTH]: 1, [EL.GLASS]: 1, [EL.MUD]: 1, [EL.OBSIDIAN]: 1 };
+const MELTS = { [EL.STONE]: 1, [EL.EARTH]: 1, [EL.GLASS]: 1, [EL.MUD]: 1, [EL.OBSIDIAN]: 1, [EL.CONCRETE]: 1, [EL.BRICK]: 1, [EL.ASPHALT]: 1 };
 
 // ---------- earth helpers ----------
-const EARTHY = new Set([EL.EARTH, EL.STONE, EL.SAND, EL.MUD]);
+const EARTHY = new Set([EL.EARTH, EL.STONE, EL.SAND, EL.MUD, EL.CONCRETE, EL.BRICK, EL.ASPHALT]); // earthbenders rip up the city too
 const SOLID_KINDS = new Set([Kind.STATIC, Kind.POWDER]);
 
 // Take up to n cells whose type is in `kinds` from around (ox, oy), nearest first within maxR,
@@ -270,7 +270,7 @@ const KITS = {
     // (~50 cells each), following slopes: it launches enemies it passes under and leaves the
     // ground smouldering. In the air you slam straight down first and stomp on landing.
     basic: {
-      cost: 14, cooldown: 45, pose: 'slam', poseTime: 14,
+      cost: 14, cooldown: 75, pose: 'slam', poseTime: 14,
       cast(c) {
         const p = c.p;
         if (p.onGround) stomp(c);
@@ -280,14 +280,14 @@ const KITS = {
     // X: fireballs. Hold to conjure up to 3 fireballs that orbit you; then each tap of X flings
     // one along your aim (they explode on impact, or when they pass close to an enemy).
     heavy: {
-      cost: 10, hold: true, drain: 0.45, maxHold: 40, cooldown: 25, pose: 'charge', orbs: true, quietRelease: true,
+      cost: 10, hold: true, drain: 0.45, maxHold: 40, cooldown: 50, pose: 'charge', orbs: true, quietRelease: true,
       hold(c, ch) { drawOrbs(c, orbCount(ch.t), ch.t); },
       release(c, ch) { makeOrbs(c, ch, () => ({})); },
     },
     // C: flame wall. A wall of fire bursts up ahead of you for 3 s (power 40): weak shots passing
     // through burn up, water hitting it boils into a steam screen, enemies standing in it burn.
     special: {
-      cost: 20, cooldown: 90, pose: 'slam', poseTime: 12,
+      cost: 20, cooldown: 120, pose: 'slam', poseTime: 12,
       cast(c) {
         const p = c.p, x = Math.floor(c.center[0] + p.facing * 16);
         const base = groundBelow(c.grid, x, p.y) > 0 ? groundBelow(c.grid, x, p.y) : Math.floor(p.y + BH);
@@ -300,7 +300,7 @@ const KITS = {
     // Beats water: electrifies water attacks and shocks the water bender. Ignites what it hits,
     // fuses sand into glass, electrifies a whole connected body of water.
     defense: {
-      cost: 18, cooldown: 90, pose: 'charge', poseTime: 12,
+      cost: 18, cooldown: 120, pose: 'charge', poseTime: 12,
       cast(c) { c.p.bolt = { t: 0 }; },
     },
     // S: fire jet (hold). Flame jets carry you along the arrows (forward by default, Up climbs,
@@ -329,7 +329,7 @@ const KITS = {
     // cells) and grabs their feet for 1 s: they can't walk, jump or jet (they can still attack;
     // smashing the hand frees them). Whiffs onto the ground ahead if nobody is in range.
     basic: {
-      cost: 15, cooldown: 110, pose: 'lift', poseTime: 14,
+      cost: 15, cooldown: 140, pose: 'lift', poseTime: 14,
       cast(c) {
         const p = c.p, v = nearestEnemy(c, 100);
         const x = v ? v.x + BW / 2 : c.center[0] + p.facing * 40;
@@ -343,7 +343,7 @@ const KITS = {
     // X: stones. Hold to rip rock from the ground into up to 3 stones that orbit you; then each
     // tap of X hurls one along your aim.
     heavy: {
-      cost: 8, hold: true, drain: 0.4, maxHold: 40, cooldown: 25, pose: 'lift', orbs: true, quietRelease: true,
+      cost: 8, hold: true, drain: 0.4, maxHold: 40, cooldown: 50, pose: 'lift', orbs: true, quietRelease: true,
       start(c, ch) { ch.rock = []; },
       hold(c, ch) {
         if (ch.t % 2 === 0 && ch.rock.length < 27) ch.rock.push(...takeGround(c, 1, c.center));
@@ -357,7 +357,7 @@ const KITS = {
     // C: a stone pillar bursts up right in front of you (a wall). Down+C: under your own feet,
     // launching you. Surf or dash into a pillar to fire it forward as a battering ram.
     special: {
-      cost: 15, cooldown: 30, pose: 'slam', poseTime: 12,
+      cost: 15, cooldown: 75, pose: 'slam', poseTime: 12,
       cast(c) {
         const under = c.aim[1] > 0 && c.aim[0] === 0;
         const x = Math.floor(c.p.x + BW / 2 + (under ? 0 : c.p.facing * 14));
@@ -372,7 +372,7 @@ const KITS = {
     // pillar erupts under whoever threw it (14, launches them). Whiff it and you're open: no
     // moves for half a second.
     defense: {
-      cost: 18, cooldown: 80, pose: 'guard', poseTime: 24,
+      cost: 18, cooldown: 110, pose: 'guard', poseTime: 24,
       cast(c) {
         c.p.parry = { t: 0, hit: null };
         c.fx.shake(1.5);
@@ -414,13 +414,13 @@ const KITS = {
     // Z: water bullets. A rapid burst of 4 small water shots (power 6 each) along your aim: each
     // one puts out a fire attack it meets, splashes real water, and stings (4 damage).
     basic: {
-      cost: 12, cooldown: 30, pose: 'palms', poseTime: 18,
+      cost: 12, cooldown: 70, pose: 'palms', poseTime: 18,
       cast(c) { c.p.bullets = { n: 4, t: 0 }; },
     },
     // X: ice spears. Hold to draw water into up to 3 ice spears that orbit you; then each tap
     // of X fires one along your aim (freezes the area it hits).
     heavy: {
-      cost: 8, hold: true, drain: 0.4, maxHold: 40, cooldown: 25, pose: 'lift', orbs: true, quietRelease: true,
+      cost: 8, hold: true, drain: 0.4, maxHold: 40, cooldown: 50, pose: 'lift', orbs: true, quietRelease: true,
       start(c, ch) { ch.n = 0; },
       hold(c, ch) {
         if (ch.t % 2 === 0 && ch.n < 18) ch.n += takeWater(c, 1, c.center).length;
@@ -432,7 +432,7 @@ const KITS = {
     // (~120 cells): it pushes enemies along, drowns fire attacks and burning things it meets,
     // and leaves water behind to fight in (power 35, fading as it travels).
     special: {
-      cost: 28, cooldown: 120, pose: 'wave', poseTime: 16,
+      cost: 28, cooldown: 150, pose: 'wave', poseTime: 16,
       cast(c) {
         const p = c.p, vol = gatherWater(c, 30, 500); // nearby water joins the wave
         p.tides.push({ x: c.center[0] + p.facing * 6, y: p.y + BH, dir: p.facing, t: 0, hit: new Set(), vol });
@@ -442,7 +442,7 @@ const KITS = {
     // A: erosion jet (Water's answer to Earth). Hold: a high-pressure jet (power 65) that blasts
     // through stone attacks and washes earth, sand and stone walls away. Drains mana while held.
     defense: {
-      cost: 10, hold: true, drain: 1.1, maxHold: 90, cooldown: 70, pose: 'jet',
+      cost: 10, hold: true, drain: 1.1, maxHold: 90, cooldown: 120, pose: 'jet',
       hold(c, ch) { erosionJet(c, ch); },
     },
     // S: riptide (hold). A jet of real water carries you along the arrows until you let go or run
@@ -474,13 +474,13 @@ const KITS = {
     // after the first and tilted the other way (power 9 each, 5 dmg + a shove). Air beats water:
     // each blade scatters a water attack into mist. They slice loose sand / water out of the way.
     basic: {
-      cost: 12, cooldown: 40, pose: 'palms', poseTime: 12,
+      cost: 12, cooldown: 70, pose: 'palms', poseTime: 12,
       cast(c) { c.p.bladeQ = { n: 2, t: 0 }; },
     },
     // X: air cannons. Hold to compress up to 3 balls of air that orbit you; then each tap of X
     // fires one as a pressure sphere that bursts into a wind shockwave.
     heavy: {
-      cost: 8, hold: true, drain: 0.45, maxHold: 40, cooldown: 25, pose: 'charge', orbs: true, quietRelease: true,
+      cost: 8, hold: true, drain: 0.45, maxHold: 40, cooldown: 50, pose: 'charge', orbs: true, quietRelease: true,
       hold(c, ch) { drawOrbs(c, orbCount(ch.t), ch.t); c.grid.addWind(c.center[0], c.center[1], 10, 0, 0); },
       release(c, ch) { makeOrbs(c, ch, () => ({})); },
     },
@@ -488,7 +488,7 @@ const KITS = {
     // down = spawns under you and carries you up. Sucks in loose stuff and spins it up the
     // funnel (fire -> fire tornado, water -> waterspout), flinging it out the top.
     special: {
-      cost: 22, cooldown: 60, pose: 'spin', poseTime: 16,
+      cost: 22, cooldown: 120, pose: 'spin', poseTime: 16,
       cast(c) {
         const [ax, ay] = c.aim, under = ax === 0 && ay > 0;
         const x = under ? c.center[0] : c.center[0] + ax * 14;
@@ -502,7 +502,7 @@ const KITS = {
     // shatters stone attacks and walls, pulverizes rock into sand, and blasts enemies away
     // (10-18 dmg, stunned 0.5 s).
     defense: {
-      cost: 20, cooldown: 100, pose: 'charge', poseTime: BOOM_WINDUP,
+      cost: 20, cooldown: 130, pose: 'charge', poseTime: BOOM_WINDUP,
       cast(c) { c.p.boom = { t: 0, aim: [...c.aim] }; c.p.slowT = BOOM_WINDUP; },
     },
     // S: air flight (hold). Ride a rushing current of wind along the arrows until you let go or run
@@ -1283,7 +1283,8 @@ export function updateAbilities(p, input, world) {
   // X orbs: a fresh X press throws one (holding X only charges when you have none).
   const xPress = !!input.held.heavy && !p.xWasHeld;
   p.xWasHeld = !!input.held.heavy;
-  if (p.orbs && xPress && !p.channel) throwOrb(c);
+  if (p.orbThrowT > 0) p.orbThrowT--;
+  if (p.orbs && xPress && !p.channel && !(p.orbThrowT > 0)) { throwOrb(c); p.orbThrowT = 14; } // a beat between throws
 
   if (p.channel) {
     const m = kit[p.channel.slot];
@@ -1476,7 +1477,7 @@ function tidesOngoing(c) {
 }
 
 // ---------- erosion jet ----------
-const ERODES = new Set([EL.STONE, EL.EARTH, EL.SAND, EL.MUD, EL.GLASS, EL.OBSIDIAN, EL.ASH]);
+const ERODES = new Set([EL.STONE, EL.EARTH, EL.SAND, EL.MUD, EL.GLASS, EL.OBSIDIAN, EL.ASH, EL.CONCRETE, EL.BRICK, EL.ASPHALT]);
 function erosionJet(c, ch) {
   const p = c.p, g = c.grid, [ax, ay] = c.aim, [hx, hy] = c.hand;
   p.slowT = 2;

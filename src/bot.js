@@ -45,6 +45,7 @@ export class Bot {
     this.action = null;      // { slot, ticks, hold, aim: [h, v], track }
     this.think = 30;         // ticks until the next attack decision
     this.dodgeCd = 0;
+    this.progT = 0;
     this.lastX = player.x; this.stuckT = 0; this.stuckWin = 0; this.unstick = 0;
     this.strafe = 0;         // small random footwork
     this.healing = false;
@@ -326,6 +327,18 @@ export class Bot {
       this.unstick = 0;
       if (this.ready('mobility', 20)) { this.action = { slot: 'mobility', ticks: 20, hold: true, age: 0, aim: [move, -1] }; return inp; }
       if (p.type === 'fire' && this.ready('special')) { this.action = { slot: 'special', ticks: 3, hold: false, aim: [move, 0] }; return inp; } // kick through
+    }
+    // Big map: target well above us, or no progress toward it for 3 s (stuck in a building,
+    // on a crane ...): jet toward it.
+    if (++this.progT >= 180) {
+      const noProgress = this.lastDist !== undefined && dist > this.lastDist - 15 && dist > 80;
+      this.lastDist = dist; this.progT = 0;
+      if (noProgress) this.climb = 1;
+    }
+    if (q && ((dy < -45 && Math.abs(dx) < 140) || this.climb) && this.ready('mobility', 30)) {
+      this.climb = 0;
+      this.action = { slot: 'mobility', ticks: 30, hold: true, age: 0, aim: [Math.sign(dx) || 1, dy < -20 ? -1 : dy > 20 ? 1 : 0] };
+      return inp;
     }
     // Close the gap fast when far.
     if (dist > 170 && this.ready('mobility') && Math.random() < 0.02 * L.aggro && !this.danger(Math.sign(dx))) {

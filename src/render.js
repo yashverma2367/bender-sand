@@ -64,7 +64,7 @@ export function createRenderer(grid, canvas) {
   }
 
   function draw(heatView) {
-    const { type, shade, temp, life, vx, vy, fw } = grid;
+    const { type, shade, temp, life, vx, vy, fw, backdrop } = grid;
     const x0 = Math.max(0, view.x), x1 = Math.min(w, view.x + view.w + 1);
     const y0 = Math.max(0, view.y), y1 = Math.min(h, view.y + view.h + 1);
     for (let y = y0; y < y1; y++) {
@@ -78,10 +78,11 @@ export function createRenderer(grid, canvas) {
           continue;
         }
 
-        if (t === 0) {
+        if (t === 0) { // empty: the map's painted backdrop (sky, skyline, interiors), tinted by wind
           const f = frow + ((x / FIELD) | 0);
           const m = Math.abs(vx[f]) + Math.abs(vy[f]);
-          buf[i] = m > 0.2 ? blend(BG, WIND_TINT, Math.min(0.3, m * 0.06)) : BG;
+          const bg = backdrop ? backdrop[i] : BG;
+          buf[i] = m > 0.2 ? blend(bg, WIND_TINT, Math.min(0.3, m * 0.06)) : bg;
           continue;
         }
 
@@ -94,7 +95,7 @@ export function createRenderer(grid, canvas) {
           if (Math.random() < 0.3 && s < 3) s++;
           c = PALETTE[t * SHADES + s];
         } else if (t === EL.SMOKE) {
-          c = blend(BG, c, Math.min(1, life[i] / 50));
+          c = blend(backdrop ? backdrop[i] : BG, c, Math.min(1, life[i] / 50));
         } else if (t === EL.WATER || t === EL.LAVA) {
           if (Math.random() < 0.01) shade[i] = (Math.random() * SHADES) | 0; // shimmer
           if (t === EL.LAVA) {
@@ -175,7 +176,18 @@ export function createRenderer(grid, canvas) {
       const fire = PALETTE[EL.FIRE * SHADES + ((Math.random() * 3) | 0)];
       pal = { ...pal, H: fire, C: PALETTE[EL.FIRE * SHADES + ((Math.random() * 3) | 0)] };
     }
-    drawSprite(p, px, pal, flash, WHITE);
+    if (p.color) { // a 1-px outline in the player's color around the whole body
+      if (!tagColors.has(p.color)) tagColors.set(p.color, pack(p.color));
+      const oc = tagColors.get(p.color), drawn = new Set();
+      drawSprite(p, (x, y, c) => { if (x >= 0 && x < w && y >= 0 && y < h) { buf[y * w + x] = c; drawn.add(y * w + x); } }, pal, flash, WHITE);
+      for (const i of drawn) {
+        const x = i % w;
+        for (const j of [i - 1, i + 1, i - w, i + w]) {
+          if (j < 0 || j >= w * h || drawn.has(j) || Math.abs((j % w) - x) > 1) continue;
+          buf[j] = blend(buf[j], oc, 0.85);
+        }
+      }
+    } else drawSprite(p, px, pal, flash, WHITE);
     // HP bar (and air bar while holding breath) above the head.
     const bx = Math.floor(p.x), by = Math.floor(p.y);
     const hx = bx - 2, len = BW + 4;
@@ -185,6 +197,7 @@ export function createRenderer(grid, canvas) {
       const tc = tagColors.get(p.color);
       for (let k = 1; k < len - 1; k++) px(hx + k, by - 6, tc);
       px(hx + (len >> 1), by - 5, tc);
+      if (p.tag) drawTag(hx + len / 2, by - 13, p.tag, p.color);
     }
     bar(hx, by - 4, len, p.hp / MAX_HP, HP_ON);
     bar(hx, by - 3, len, p.energy / MAX_ENERGY, ENERGY_ON);
@@ -217,6 +230,16 @@ export function createRenderer(grid, canvas) {
   // 3x5 pixel digits for damage numbers (rows top to bottom, 3 bits each).
   const DIGITS = ['111101101101111', '010110010010111', '111001111100111', '111001111001111', '101101111001001',
     '111100111001111', '111100111101111', '111001001001001', '111101111101111', '111101111001111'];
+  // "P1".."P4" over a player's head, in their color with a dark outline.
+  const GLYPH_P = '110101110100100';
+  function drawTag(cx, y, n, color) {
+    const c = tagColors.get(color), x0 = Math.round(cx - 3.5), y0 = Math.round(y);
+    for (const [g, ox] of [[GLYPH_P, 0], [DIGITS[n], 4]]) for (let r = 0; r < 5; r++) for (let cc = 0; cc < 3; cc++) {
+      const X = x0 + ox + cc, Y = y0 + r;
+      if (g[r * 3 + cc] === '1') px(X, Y, c);
+      else if (X >= 0 && X < w && Y >= 0 && Y < h) buf[Y * w + X] = blend(buf[Y * w + X], DARK, 0.55);
+    }
+  }
   function drawPopups() {
     for (const q of juice.popups) drawDigits(q.x, q.y, q.text, q.color, Math.min(1, q.life / 15));
   }
@@ -271,11 +294,28 @@ export function createRenderer(grid, canvas) {
     }
   }
 
-  function present(players, particles, labels = null) {
+  // Who threw what: a small diamond in the thrower's color riding on each live attack.
+  function drawOwnerMarks(entries, list) {
+    if (!entries || list.length < 2) return;
+    const byId = new Map(list.map((p) => [p.id, p]));
+    for (const e of entries) {
+      const o = byId.get(e.owner);
+      if (e.dead || !o || !o.color) continue;
+      if (!tagColors.has(o.color)) tagColors.set(o.color, pack(o.color));
+      const c = tagColors.get(o.color);
+      const x = Math.round(e.x2 !== undefined ? (e.x + e.x2) / 2 : e.x), y = Math.round((e.x2 !== undefined ? Math.min(e.y, e.y2) : e.y) - (e.r || 3) - 3);
+      for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) px(x + dx, y + dy, DARK);
+      px(x, y, c);
+      for (const [dx, dy] of [[0, -2], [-2, 0], [2, 0], [0, 2], [-1, -1], [1, -1], [-1, 1], [1, 1]]) px(x + dx, y + dy, c);
+    }
+  }
+
+  function present(players, particles, labels = null, owners = null) {
     if (particles) drawParticles(particles);
     const list = players ? (Array.isArray(players) ? players : [players]) : [];
     for (const p of list) drawPlayer(p);
     drawEdgeArrows(list);
+    if (!labels) drawOwnerMarks(owners, list);
     drawPopups();
     if (labels) drawAttackLabels(labels); // Clash Lab power numbers, on top
     wctx.putImageData(img, 0, 0, view.x, view.y, view.w, view.h);

@@ -113,6 +113,21 @@ export class Player {
     return false;
   }
 
+  // Bumping into floating debris (a few loose solid pixels left by blasts) knocks it away
+  // instead of stopping you. Returns true if anything in the box at (bx, by) was cleared.
+  clearStrays(bx, by) {
+    const g = this.grid, ps = Player.particles;
+    let any = false;
+    for (let y = Math.max(0, by); y < Math.min(g.h, by + BH); y++) for (let x = Math.max(0, bx); x < Math.min(g.w, bx + BW); x++) {
+      const c = g.strayCluster(x, y);
+      if (!c) continue;
+      g.crumbleStray(c);
+      for (const i of c) if (ps) ps.lift(i % g.w, (i / g.w) | 0, this.vx * 0.5 + (Math.random() - 0.5), -0.5 - Math.random(), { bounces: 0 });
+      any = true;
+    }
+    return any;
+  }
+
   update(input) {
     if (this.dead) {
       if (--this.respawn <= 0) this.spawn();
@@ -233,6 +248,7 @@ export class Player {
           if (!this.collide(bx, by - k)) { this.x = nx; this.y -= k; climbed = true; }
         }
       }
+      if (!climbed && this.clearStrays(bx, by) && !this.collide(bx, by)) { this.x = nx; continue; }
       if (!climbed) { this.vx = 0; return; }
     }
   }
@@ -245,6 +261,7 @@ export class Player {
       const ny = this.y + step;
       const by = Math.floor(ny);
       if (by === Math.floor(this.y) || !this.collide(Math.floor(this.x), by)) { this.y = ny; continue; }
+      if (step < 0 && this.clearStrays(Math.floor(this.x), by) && !this.collide(Math.floor(this.x), by)) { this.y = ny; continue; } // head-butt debris overhead
       this.vy = 0;
       return step > 0;
     }
@@ -365,7 +382,8 @@ export class Player {
   }
 
   flushDamage() {
-    if (this.dmgShow >= 1) popup(this.x + BW / 2, this.y - 10, Math.round(this.dmgShow), this.dmgShow >= 15 ? '#ffd24e' : '#ffffff');
+    const by = Player.registry.get(this.lastHitBy); // tinted with the attacker's color: who hit whom
+    if (this.dmgShow >= 1) popup(this.x + BW / 2, this.y - 20, Math.round(this.dmgShow), by && by.color && by !== this ? by.color : this.dmgShow >= 15 ? '#ffd24e' : '#ffffff');
     this.dmgShow = 0; this.dmgShowT = 0;
   }
 

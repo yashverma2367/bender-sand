@@ -77,7 +77,7 @@ export function createScreens(stage, maps, handlers) {
       if (f.teams) setup.slots.forEach((s, k) => { s.team = k < 2 ? 0 : 1; });
     }));
     box.append(choice('Win', Object.fromEntries(Object.entries(WINS).filter(([, w]) => !w.hidden)), 'win'));
-    box.append(choice('Map', { random: { name: 'Random' }, ...Object.fromEntries(maps.map((m) => [m.id, m])) }, 'map'));
+    if (maps.length > 1) box.append(choice('Map', { random: { name: 'Random' }, ...Object.fromEntries(maps.map((m) => [m.id, m])) }, 'map'));
 
     const f = FORMATS[setup.format];
     const table = el('div', 'slots');
@@ -225,7 +225,7 @@ export function createScreens(stage, maps, handlers) {
       return row;
     };
     box.append(choice('Format', FORMATS, 'format'), choice('Win', WINS, 'win'),
-      choice('Map', { random: { name: 'Random' }, ...Object.fromEntries(maps.map((m) => [m.id, m])) }, 'map'),
+      ...(maps.length > 1 ? [choice('Map', { random: { name: 'Random' }, ...Object.fromEntries(maps.map((m) => [m.id, m])) }, 'map')] : []),
       choice('Tools', { off: { name: 'Normal' }, on: { name: 'Custom (host gets all tools)' } }, 'customKey'));
 
     const f = FORMATS[cfg.format];
@@ -336,7 +336,7 @@ export function createScreens(stage, maps, handlers) {
   }
 
   // ---------- training ----------
-  const training = { type: 'fire', dummy: 'earth', mode: 'dummy', map: 'fortress', infinite: true };
+  const training = { type: 'fire', dummy: 'earth', mode: 'dummy', map: 'city', infinite: true };
   function showTraining() {
     const box = el('div', 'panel wide');
     box.append(el('h2', 'title small', 'TRAINING'));
@@ -354,7 +354,7 @@ export function createScreens(stage, maps, handlers) {
     };
     box.append(pickRow('You', 'type'), pickRow('Dummy', 'dummy'),
       opt('Dummy', [['dummy', 'Stands still'], ['walker', 'Walks around'], ['easy', 'Fights back (Easy CPU)']], 'mode'),
-      opt('Map', maps.map((m) => [m.id, m.name]), 'map'),
+      ...(maps.length > 1 ? [opt('Map', maps.map((m) => [m.id, m.name]), 'map')] : []),
       opt('Mana', [[true, 'Infinite mana + ultimate'], [false, 'Normal']], 'infinite'));
     box.append(el('div', 'hint', 'combo counter on top · the dummy heals after 2 s without a hit · Esc to leave'));
     const actions = el('div', 'actions');

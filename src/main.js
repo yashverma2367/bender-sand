@@ -25,8 +25,8 @@ import { stepProjectiles, resolveClashes, clearClash, lastEntries } from './clas
 import { createLab } from './lab.js';
 import { Bot } from './bot.js';
 
-// World: wide enough for 3-4 benders, always shown in full.
-const W = 640, H = 216;
+// World: one big side-scrolling city. Matches show a camera view of it, menus / Custom the whole map.
+const W = 1200, H = 360;
 const TICK_MS = 1000 / 60;
 const MAX_BRUSH = 30;
 const WIND_STRENGTH = 0.8; // force per grid cell of mouse drag
@@ -55,7 +55,7 @@ particles.onHit = (attackerId, victim, dmg) => creditDamage(world, attackerId, d
 
 const state = { mode: 'menu', selected: EL.SAND, brush: 4, paused: false, heatView: false, fps: 0, count: 0, map: null };
 let match = null, lastMatch = null, resultsShown = false, matchOverSeen = false;
-let mapTick = null; // live map hazards (e.g. erupting volcanoes)
+let mapTick = null; // live map hazards (the subway train)
 const mapEnv = { fx, players: world.players };
 let tickCount = 0;
 
@@ -75,48 +75,91 @@ const onlineCustom = () => state.mode === 'match' && !!net && !!match && !!match
 const view = { x: 0, y: 0, w: W, h: H };
 renderer.setView(view);
 canvas.style.aspectRatio = `${W} / ${H}`;
-// Phones / tablets: a zoomed camera that follows your bender (desktop always shows the whole map).
-const CAM_PX = 2.6;         // screen pixels per cell on touch screens (bigger screens see more)
-let camMode = false, camX = 0, camY = 0, camSnap = true;
-function camPlayer() {
-  if (state.mode === 'guest') return guestView.players[guestView.you];
-  return world.players.find((p) => p.source === 'touch' || p.source === 'local') || world.players[0];
+// In matches a camera follows the action: your bender (several local players: framed together,
+// zooming out as they spread apart up to MAX_ZOOM), online guests their own bender, spectators
+// (only bots alive) everyone. Menus and Custom show the whole map.
+const SHOW_FULL_MAP = true;        // matches show the whole city (false: a camera following you)
+const MIN_VIEW_AREA = (W * H) / 4; // at zoom 1 you always see at least a quarter of the map
+// View size (cells) for a screen of this aspect ratio: exactly a quarter of the map's area.
+function baseViewFor(aspect) {
+  let h = Math.round(Math.sqrt(MIN_VIEW_AREA / aspect)), w = Math.round(h * aspect);
+  if (w > W) { w = W; h = Math.round(W / aspect); }
+  if (h > H) { h = H; w = Math.min(W, Math.round(H * aspect)); }
+  return [w, h];
+}
+const MAX_ZOOM = 1.6;
+let camMode = false, camX = 0, camY = 0, camSnap = true, camZoom = 1, baseW = W, baseH = H;
+const isHuman = (p) => !!p.source && !p.source.startsWith('cpu') && p.source !== 'net';
+function camTargets() {
+  if (state.mode === 'guest') {
+    const me = guestView.players[guestView.you];
+    return me && !me.dead ? [me] : guestView.players.filter((q) => !q.dead);
+  }
+  const humans = world.players.filter((p) => !p.dead && isHuman(p));
+  if (humans.length) return humans;
+  if (world.players.some(isHuman)) return []; // you're respawning: hold the camera still
+  return world.players.filter((p) => !p.dead);
 }
 function updateCamera() {
   if (!camMode) return;
-  const p = camPlayer();
-  if (p && !p.dead) {
-    const tx = p.x + 2.5 - view.w / 2, ty = p.y + 9 - view.h * 0.4; // you sit a bit above center, clear of the thumbs
-    if (camSnap) { camX = tx; camY = ty; camSnap = false; }
-    camX += (tx - camX) * 0.12; camY += (ty - camY) * 0.12;
+  let tx = camX + view.w / 2, ty = camY + view.h / 2, want = camZoom;
+  if (lab.active) { want = Math.min(W / baseW, H / baseH, Math.max(1, 680 / baseW)); tx = 330; ty = 150; }
+  else {
+    const list = camTargets();
+    if (list.length) {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const p of list) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x + 5); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y + 18); }
+      tx = (x0 + x1) / 2; ty = (y0 + y1) / 2;
+      want = Math.max(1, (x1 - x0 + 140) / baseW, (y1 - y0 + 100) / baseH);
+      want = Math.min(want, MAX_ZOOM, W / baseW, H / baseH);
+    }
   }
+  if (camSnap) camZoom = want; else camZoom += (want - camZoom) * 0.05;
+  const vw = Math.min(W, Math.round(baseW * camZoom)), vh = Math.min(H, Math.round(baseH * camZoom));
+  if (vw !== view.w || vh !== view.h) { view.w = vw; view.h = vh; renderer.setView(view); }
+  const cx = tx - view.w / 2, cy = ty - view.h * (isTouchDevice ? 0.42 : 0.55); // a bit more room above
+  if (camSnap) { camX = cx; camY = cy; camSnap = false; }
+  camX += (cx - camX) * 0.12; camY += (cy - camY) * 0.12;
   camX = Math.max(0, Math.min(W - view.w, camX)); camY = Math.max(0, Math.min(H - view.h, camY));
   view.x = Math.round(camX); view.y = Math.round(camY);
+  sfx.setListener(view.x + view.w / 2, view.w); // sounds pan / fade relative to the camera
 }
 
 function layout() { // the canvas gets more room when the sandbox toolbar is hidden
   const playingNow = state.mode === 'match' || state.mode === 'guest';
-  const cam = isTouchDevice && playingNow;
+  const cam = playingNow && !SHOW_FULL_MAP;
   if (cam !== camMode) camSnap = true;
   camMode = cam;
-  document.body.classList.toggle('cam', cam);
-  if (cam) { // full screen, zoomed in, following the player
+  document.body.classList.toggle('cam', cam && isTouchDevice);
+  if (cam && isTouchDevice) { // full screen, zoomed in, following the player
     const sw = window.innerWidth, sh = window.innerHeight;
-    view.h = Math.min(H, Math.max(120, Math.round(sh / CAM_PX))); view.w = Math.min(W, Math.round(view.h * sw / sh));
+    [baseW, baseH] = baseViewFor(sw / sh);
+    view.w = baseW; view.h = baseH; camZoom = 1;
     renderer.setView(view);
     canvas.style.aspectRatio = 'auto';
     stage.style.width = '';
     toolbarEl.style.display = statsEl.style.display = helpEl.style.display = 'none';
     document.body.classList.add('playing');
+    updateCamera();
     return;
   }
-  view.x = 0; view.y = 0; view.w = W; view.h = H;
-  renderer.setView(view);
-  canvas.style.aspectRatio = `${W} / ${H}`;
   const sandbox = state.mode === 'sandbox' || onlineCustom();
   const reserve = sandbox ? 290 : isTouchDevice ? 16 : 70;
-  stage.style.width = `min(calc(100vw - ${isTouchDevice ? 8 : 32}px), calc((100vh - ${reserve}px) * ${(W / H).toFixed(3)}))`;
-  document.body.classList.toggle('playing', state.mode === 'match' || state.mode === 'guest');
+  let aspect = W / H;
+  if (cam) { // desktop camera: a quarter of the map, shaped like the window
+    aspect = Math.max(1.4, Math.min(3.2, (window.innerWidth - 32) / Math.max(200, window.innerHeight - reserve)));
+    [baseW, baseH] = baseViewFor(aspect);
+    view.w = baseW; view.h = baseH; camZoom = 1;
+    renderer.setView(view);
+    updateCamera();
+  } else {
+    view.x = 0; view.y = 0; view.w = W; view.h = H;
+    renderer.setView(view);
+    sfx.setListener(W / 2, W);
+  }
+  canvas.style.aspectRatio = `${view.w} / ${view.h}`;
+  stage.style.width = `min(calc(100vw - ${isTouchDevice ? 8 : 32}px), calc((100vh - ${reserve}px) * ${aspect.toFixed(3)}))`;
+  document.body.classList.toggle('playing', playingNow);
   for (const k of [0, 1]) if (toolbarEl.children[k]) toolbarEl.children[k].style.display = net ? 'none' : ''; // map / bender rows: Custom only
   canvas.style.width = '100%';
   toolbarEl.style.display = sandbox ? '' : 'none';
@@ -169,7 +212,7 @@ function toMenu() {
   state.mode = 'menu'; state.paused = false;
   match = null;
   setPlayers([]);
-  useMap(MAPS[1]); // something alive behind the menu
+  useMap(MAPS[0]); // the city behind the menu
   layout();
   screens.updateHUD(null);
 }
@@ -199,7 +242,7 @@ const screens = createScreens(stage, MAPS, {
   onResume: () => { state.paused = false; },
   onRematch: () => {
     if (!lastMatch) return;
-    if (net) { net.startMatch(lastMatch.cfg.map.id); startMatch(lastMatch.cfg, net.slots()); }
+    if (net) { net.startMatch(lastMatch.cfg.map.id); startMatch(lastMatch.cfg, net.slots()); net.baseline(); }
     else startMatch(lastMatch.cfg, lastMatch.slots);
   },
   onQuit: toMenu,
@@ -237,6 +280,7 @@ function showHostLobby() {
       net.startMatch(map.id);
       screens.hideMenu();
       startMatch({ format: c.format, win: c.win, map, custom: c.customKey === 'on', online: true }, net.slots());
+      net.baseline(); // guests build the same map themselves
     },
     onLeave: leaveOnline,
   });
@@ -279,7 +323,8 @@ async function joinOnline(code, name, type, status) {
     onStart: (cfg) => {
       guestView.map = cfg && cfg.map;
       state.mode = 'guest'; state.paused = false; match = null; mapTick = null; resultsShown = false;
-      setPlayers([]); grid.clear(); particles.clear();
+      setPlayers([]);
+      loadMap(grid, particles, MAPS.find((m) => m.id === guestView.map) || MAPS[0]); // same map locally; snapshots send only changes
       Object.assign(guestView, { players: [], hud: null, since: 0 });
       screens.hideMenu(); layout();
     },
@@ -307,7 +352,7 @@ async function joinOnline(code, name, type, status) {
 // Snapshot player -> object the renderer can draw.
 function guestPlayer(v) {
   return {
-    x: v.x, y: v.y, vx: v.vx, vy: v.vy, facing: v.f, type: v.t, color: v.c, dead: !!v.d,
+    x: v.x, y: v.y, vx: v.vx, vy: v.vy, facing: v.f, type: v.t, color: v.c, tag: v.g, dead: !!v.d,
     invulnT: v.iv, flash: v.fl, frozenT: v.fz, flameHair: !!v.fh, hp: v.hp, energy: v.en, ult: v.u, air: v.a,
     def: BENDER_TYPES[v.t], afterimages: v.ai, channel: v.ch ? { slot: v.ch[0], t: v.ch[1] } : null,
     anim: { j: v.an.j, n: v.an.n, rx: v.an.rx, ry: v.an.ry, state: v.an.s, t: v.an.t, blink: 0 },
@@ -432,6 +477,7 @@ function hose(p, inp) {
 function tick() {
   if (tools() && mouse.down && tool() !== WIND_TOOL) grid.paint(mouse.x, mouse.y, state.brush, tool());
   grid.step();
+  grid.sweepStrays(); // floating debris crumbles and falls
   if (mapTick) mapTick(grid, particles, tickCount++, mapEnv);
   if (match) match.tick();
   if (tools() && isDown('p')) hose(toolPlayer(), sandboxInput);
@@ -549,7 +595,7 @@ function frame(now) {
   updateCamera();
   renderer.draw(state.heatView);
   if (tools() && mouse.inside) renderer.drawBrush(mouse.x, mouse.y, state.brush);
-  renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles, lab.active ? lastEntries : null);
+  renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles, lab.active ? lastEntries : null, state.mode === 'guest' ? null : lastEntries);
   // Brightness: flashes brighten, an ultimate cinematic darkens the world for a moment.
   const cineDim = juice.cine ? Math.max(0.5, 1 - 0.5 * Math.min(1, juice.cine.t / 6, (60 - juice.cine.t) / 15)) : 1;
   if (state.mode === 'guest' && juice.cine && ++juice.cine.t > 70) juice.cine = null; // guests age it here

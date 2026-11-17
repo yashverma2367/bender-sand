@@ -48,6 +48,7 @@ export class Match {
       p.name = s.name;
       p.source = s.source;
       p.color = this.format.teams ? TEAM_COLORS[s.team] : PLAYER_COLORS[k];
+      p.tag = k + 1; // P1..P4 label over the head
       p.team = this.format.teams ? s.team : null;
       p.kos = 0; p.deaths = 0;
       p.lives = this.win.lives || Infinity;

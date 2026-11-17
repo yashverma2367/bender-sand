@@ -114,6 +114,53 @@ export class Grid {
   }
 
   // ---------- tick ----------
+  // Floating debris: a solid (static) fragment of at most `max` cells touching no other solid
+  // cell (8-neighborhood, through the fragment). Returns its cell indices, or null if (x, y)
+  // isn't static or belongs to something bigger / anchored.
+  strayCluster(x, y, max = 8) {
+    const { w, h, type } = this, i0 = y * w + x;
+    if (KIND[type[i0]] !== Kind.STATIC) return null;
+    const seen = [i0];
+    for (let k = 0; k < seen.length; k++) {
+      const i = seen[k], cx = i % w, cy = (i / w) | 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const X = cx + dx, Y = cy + dy;
+        if (X < 0 || X >= w || Y >= h) return null; // touching the map edge / floor: anchored
+        if (Y < 0) continue;
+        const j = Y * w + X, k2 = KIND[type[j]];
+        if (k2 !== Kind.STATIC && k2 !== Kind.POWDER) continue;
+        if (k2 === Kind.POWDER) return null; // resting on a pile: leave it
+        if (!seen.includes(j)) { seen.push(j); if (seen.length > max) return null; }
+      }
+    }
+    return seen;
+  }
+
+  // Turn a stray fragment into loose rubble that falls (rock-ish -> sand, wood / plants -> ash, ice -> water).
+  crumbleStray(cells) {
+    for (const i of cells) {
+      const t = this.type[i];
+      this.type[i] = t === EL.WOOD || t === EL.PLANT ? EL.ASH : t === EL.ICE ? EL.WATER : EL.SAND;
+      this.temp[i] = AMBIENT; this.life[i] = 0;
+    }
+  }
+
+  // Sweep a slice of the map for floating debris (call every tick; covers the map every `every` ticks).
+  sweepStrays(every = 30) {
+    const { w, h, type } = this, rows = Math.ceil(h / every), y0 = (this.tick % every) * rows;
+    for (let y = y0; y < Math.min(h, y0 + rows); y++) for (let x = 0; x < w; x++) {
+      if (KIND[type[y * w + x]] !== Kind.STATIC) continue;
+      let n = 0; // quick reject: well-connected cells are part of something bigger
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const X = x + dx, Y = y + dy;
+        if (X < 0 || X >= w || Y < 0 || Y >= h || KIND[type[Y * w + X]] === Kind.STATIC) n++;
+      }
+      if (n > 4) continue;
+      const c = this.strayCluster(x, y);
+      if (c) this.crumbleStray(c);
+    }
+  }
+
   step() {
     this.tick++;
     this.heat();

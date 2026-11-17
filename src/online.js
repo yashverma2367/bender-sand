@@ -130,6 +130,13 @@ export class HostSession {
     for (const g of this.guests) { g.enc.reset(); sendJSON(g.ctl, { k: 'start', cfg: { ...this.cfg, map: mapId } }); }
   }
 
+  // Right after the host builds the match map: guests build the same map locally, so each
+  // guest's snapshot baseline starts from it (only changes are sent, not the whole city).
+  baseline() {
+    cellCodes(this.grid, this.cur.cells);
+    for (const g of this.guests) if (g.enc) g.enc.cells.set(this.cur.cells);
+  }
+
   backToLobby() {
     this.inMatch = false;
     this.guests = this.guests.filter((g) => !g.gone);

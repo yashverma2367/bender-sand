@@ -5,6 +5,7 @@ export const Kind = { EMPTY: 0, STATIC: 1, POWDER: 2, LIQUID: 3, GAS: 4 };
 export const EL = {
   EMPTY: 0, SAND: 1, EARTH: 2, STONE: 3, WATER: 4, STEAM: 5, FIRE: 6, SMOKE: 7,
   LAVA: 8, ICE: 9, WOOD: 10, PLANT: 11, MUD: 12, ASH: 13, GLASS: 14, OBSIDIAN: 15,
+  CONCRETE: 16, STEEL: 17, BRICK: 18, ASPHALT: 19,
 };
 
 export const WIND_TOOL = 254; // brush that paints air force instead of cells
@@ -44,6 +45,15 @@ export const ELEMENTS = [
     colors: ['#a8d8e0', '#b5e0e8', '#9ccfd8', '#c2e8ee'] },
   { id: EL.OBSIDIAN, name: 'Obsidian', key: 'u', group: 'Earth', kind: Kind.STATIC, density: 10,
     colors: ['#2a1f3a', '#241a33', '#30244a', '#1e1629'] },
+  // City materials. Shade 3 is used for patterns (brick mortar, road paint, panel seams).
+  { id: EL.CONCRETE, name: 'Concrete', key: 'g', group: 'Earth', kind: Kind.STATIC, density: 10, cond: 0.08,
+    colors: ['#8f8b84', '#97938b', '#88847d', '#6f6c66'] },
+  { id: EL.STEEL, name: 'Steel', key: 'f', group: 'Earth', kind: Kind.STATIC, density: 10, cond: 0.25,
+    colors: ['#4d5a6c', '#56647a', '#45515f', '#7d8ca3'] },
+  { id: EL.BRICK, name: 'Brick', key: 'b', group: 'Earth', kind: Kind.STATIC, density: 10, cond: 0.06,
+    colors: ['#9a4a35', '#a5543c', '#8e4330', '#c4b49c'] },
+  { id: EL.ASPHALT, name: 'Asphalt', key: 'd', group: 'Earth', kind: Kind.STATIC, density: 10, cond: 0.06,
+    colors: ['#2f3034', '#34353a', '#2b2c30', '#d8c25a'] },
 
   { id: EL.WATER, name: 'Water', key: '4', group: 'Water', kind: Kind.LIQUID, density: 2, dispersion: 5,
     wind: 0.6, cond: 0.15, airLoss: 0.002, hot: [100, EL.STEAM, 0.2], cold: [-2, EL.ICE, 0.05],
