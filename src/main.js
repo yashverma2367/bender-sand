@@ -8,7 +8,8 @@ import { TOOLS, EL, WIND_TOOL, KIND, Kind } from './elements.js';
 import { createRenderer } from './render.js';
 import { Player, BENDER_TYPES, MAX_HP } from './benders.js';
 import { Particles } from './particles.js';
-import { updateAbilities, explode, creditDamage, channelInfo, MAX_ENERGY } from './abilities.js';
+import { updateAbilities, explode, creditDamage, channelInfo, MAX_ENERGY, readyMask, slotInfo } from './abilities.js';
+import { createMoveBar } from './movebar.js';
 import * as sfx from './sfx.js';
 import { setTrack, musicState } from './music.js';
 import { juice, stepJuice, resetJuice, slowmo, cinematic, ULT_NAMES } from './juice.js';
@@ -78,6 +79,7 @@ canvas.style.aspectRatio = `${W} / ${H}`;
 // In matches a camera follows the action: your bender (several local players: framed together,
 // zooming out as they spread apart up to MAX_ZOOM), online guests their own bender, spectators
 // (only bots alive) everyone. Menus and Custom show the whole map.
+const MOVEBAR_H = 118;             // desktop: screen pixels kept under the map for the move bar
 const SHOW_FULL_MAP = true;        // matches show the whole city (false: a camera following you)
 const MIN_VIEW_AREA = (W * H) / 4; // at zoom 1 you always see at least a quarter of the map
 // View size (cells) for a screen of this aspect ratio: exactly a quarter of the map's area.
@@ -144,7 +146,9 @@ function layout() { // the canvas gets more room when the sandbox toolbar is hid
     return;
   }
   const sandbox = state.mode === 'sandbox' || onlineCustom();
-  const reserve = sandbox ? 290 : isTouchDevice ? 16 : 70;
+  const play = playingNow && !isTouchDevice && !sandbox; // full-screen match: map + move bar only
+  document.body.classList.toggle('play', play);
+  const reserve = sandbox ? 290 : play ? Math.max(40, moveBar.height() || MOVEBAR_H) : isTouchDevice ? 16 : 70;
   let aspect = W / H;
   if (cam) { // desktop camera: a quarter of the map, shaped like the window
     aspect = Math.max(1.4, Math.min(3.2, (window.innerWidth - 32) / Math.max(200, window.innerHeight - reserve)));
@@ -158,7 +162,7 @@ function layout() { // the canvas gets more room when the sandbox toolbar is hid
     sfx.setListener(W / 2, W);
   }
   canvas.style.aspectRatio = `${view.w} / ${view.h}`;
-  stage.style.width = `min(calc(100vw - ${isTouchDevice ? 8 : 32}px), calc((100vh - ${reserve}px) * ${aspect.toFixed(3)}))`;
+  stage.style.width = `min(calc(100vw - ${play ? 0 : isTouchDevice ? 8 : 32}px), calc((100vh - ${reserve}px) * ${aspect.toFixed(3)}))`;
   document.body.classList.toggle('playing', playingNow);
   for (const k of [0, 1]) if (toolbarEl.children[k]) toolbarEl.children[k].style.display = net ? 'none' : ''; // map / bender rows: Custom only
   canvas.style.width = '100%';
@@ -193,6 +197,7 @@ function startSandbox() {
 }
 
 function startMatch(cfg, slots) {
+  goFullscreen(true); // (started from a click, so the browser allows it)
   resetJuice(); clearClash(); matchOverSeen = false;
   lastMatch = { cfg, slots };
   state.mode = 'match'; state.paused = false; resultsShown = false;
@@ -226,6 +231,32 @@ function pauseOrBack() {
 }
 
 const touch = isTouchDevice ? createTouchControls(document.body, { onPause: () => pauseOrBack() }) : null;
+// Desktop move bar: the moves of every player on this computer, under the map.
+const moveBar = createMoveBar(document.getElementById('movebar'));
+function updateMoveBar() {
+  const playing = (state.mode === 'match' || state.mode === 'guest') && !isTouchDevice;
+  if (!playing) { moveBar.hide(); return; }
+  let list;
+  if (state.mode === 'guest') {
+    const me = guestView.players[guestView.you], hp = guestView.hud && guestView.hud.players[guestView.you];
+    list = me && hp ? [{ name: hp.name, color: me.color, tag: me.tag, type: me.type, source: 'local', mask: hp.rd || 0, ult: me.ult, dead: me.dead }] : [];
+  } else {
+    list = world.players.filter(isHuman).map((p) => ({ name: p.name, color: p.color, tag: p.tag, type: p.type, source: p.source,
+      mask: p.dead ? 0 : readyMask(p), ult: p.ult, dead: p.dead, ...slotInfo(p) }));
+  }
+  if (moveBar.update(list)) layout(); // the bar changed size: re-fit the map above it
+}
+
+// Matches take the whole screen (browser fullscreen); F toggles it.
+function goFullscreen(on = true) {
+  if (isTouchDevice) return;
+  try {
+    if (on && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  } catch { /* not supported */ }
+}
+document.addEventListener('fullscreenchange', () => layout());
+
 function updateTouch() { // on-screen controls only while actually playing
   if (!touch) return;
   const tp = state.mode === 'sandbox' ? sandboxPlayer
@@ -446,6 +477,7 @@ window.addEventListener('keydown', (e) => {
   if (GAME_KEYS.has(k) || k === ' ') e.preventDefault();
 
   if (k === 'escape') { pauseOrBack(); return; }
+  if (k === 'f' && !tools() && (state.mode === 'match' || state.mode === 'guest')) { goFullscreen(!document.fullscreenElement); return; }
   if (!tools() || BENDER_KEYS.has(k)) return;
 
   // Custom mode: painting / dev keys. (Bender controls are read from the keyboard state.)
@@ -609,7 +641,7 @@ function frame(now) {
   } else if (shake) { shake = 0; canvas.style.transform = ''; }
 
   frames++;
-  if (frames % 4 === 0) { screens.updateHUD(state.mode === 'guest' ? guestHud() : match); updateTouch(); }
+  if (frames % 4 === 0) { screens.updateHUD(state.mode === 'guest' ? guestHud() : match); updateTouch(); updateMoveBar(); }
   if (now - statTime >= 500) {
     state.fps = Math.round((frames * 1000) / (now - statTime));
     state.count = grid.count();

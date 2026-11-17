@@ -139,6 +139,30 @@
     .banner { position: absolute; top: 40%; left: 0; right: 0; text-align: center; font-size: 46px; font-weight: bold;
       color: #e8b04a; letter-spacing: 0.15em; text-shadow: 0 3px 8px #000; }
 
+    /* ---- desktop match: whole screen = map + move bar ---- */
+    body.play { padding: 0; gap: 0; height: 100vh; overflow: hidden; justify-content: center; }
+    body.play h1 { display: none; }
+    body.play #game { border: 0; }
+    #movebar { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; padding: 8px 10px; width: 100%; }
+    .mcard { border-top: 3px solid var(--c); background: #10121a; border-radius: 6px; padding: 5px 8px 7px; display: flex; flex-direction: column; gap: 5px; }
+    .mhead { display: flex; gap: 10px; align-items: baseline; font-size: 11px; color: #8a8f9e; }
+    .mhead b { color: var(--c); font-size: 12px; } .mmove { color: #5c6170; margin-left: auto; font-size: 10px; }
+    .mrow { display: flex; gap: 5px; }
+    .mbtn { position: relative; overflow: hidden; display: flex; align-items: center; gap: 6px; min-width: 112px;
+      background: #161820; color: #6c7180; font: 11px ui-monospace, Menlo, monospace; border: 1px solid #262a35;
+      border-radius: 6px; padding: 6px 8px; cursor: pointer; text-align: left; user-select: none; }
+    .mbtn kbd { font-size: 12px; color: #9aa0ae; padding: 1px 6px; border-color: #3a3f4d; z-index: 1; }
+    .mbtn .mname { z-index: 1; white-space: nowrap; }
+    .mbtn .mfill { position: absolute; left: 0; bottom: 0; height: 3px; background: #3a3f4d; }
+    .mbtn.ready { color: #e8e2d0; border-color: var(--c); background: #1b1e28; }
+    .mbtn.ready kbd { color: #fff; border-color: var(--c); }
+    .mbtn.ready .mfill { background: var(--c); }
+    .mbtn.nomana { color: #b0605a; }
+    .mbtn.ult.ready { box-shadow: 0 0 10px #c070ff; border-color: #c070ff; }
+    .mbtn.ult .mfill { background: #c070ff; }
+    .mbtn.down { transform: translateY(1px); background: #262a36; }
+    .mbtn.dead { opacity: 0.35; }
+
     /* ---- touch: full-screen zoomed camera while playing ---- */
     body.cam { padding: 0; }
     body.cam h1 { display: none; }
@@ -199,6 +223,7 @@
   <div id="toolbar"></div>
   <div class="rotate">&#8635;<br>Rotate your device to landscape to play</div>
   <div id="stage"><canvas id="game"></canvas></div>
+  <div id="movebar" style="display:none"></div>
   <div id="stats"></div>
   <div id="help">arrows: move · up: jump / swim · Z signature · X heavy (hold) · C special (hold) · A power move · S dash · V ultimate (charges from damage dealt) · hold up/down to aim<br>left drag: paint · right drag: erase · scroll or [ ]: brush · H: heat view · U: fill ultimate (testing) · space: pause · ⌫: clear · K: self-destruct · P: particle hose · Esc: menu</div>
   <script type="module" src="src/main.js"></script>

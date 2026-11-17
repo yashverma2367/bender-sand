@@ -1164,6 +1164,18 @@ function telegraph(c, x, y, ax, ay, len, type, t, every = 4) {
 }
 
 // Which of the six moves are ready right now (bit per slot, Z X C A S V), for the HUD.
+// For the move bar: cooldown left (0..1) and "not enough mana" per slot.
+export function slotInfo(p) {
+  const kit = KITS[p.type] || {}, cd = {}, low = {};
+  for (const s of SLOTS) {
+    const mv = kit[s];
+    if (!mv) continue;
+    cd[s] = p.cd && p.cd[s] > 0 ? Math.min(1, p.cd[s] / (mv.cooldown || 1)) : 0;
+    low[s] = s !== 'ultimate' && p.energy < (mv.cost || 0);
+  }
+  return { cd, low };
+}
+
 export function readyMask(p) {
   const kit = KITS[p.type];
   let m = 0;

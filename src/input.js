@@ -15,7 +15,7 @@ export const INPUT_SOURCES = {
 };
 
 // key = KeyboardEvent.key lowercased
-const KEYMAPS = {
+export const KEYMAPS = {
   kb1: { left: 'arrowleft', right: 'arrowright', up: 'arrowup', down: 'arrowdown',
     basic: 'z', heavy: 'x', special: 'c', defense: 'a', mobility: 's', ultimate: 'v' },
   kb2: { left: 'j', right: 'l', up: 'i', down: 'k',
@@ -40,6 +40,9 @@ export function attachKeyboard() {
   window.addEventListener('keyup', (e) => down.delete(e.key.toLowerCase()));
   window.addEventListener('blur', () => down.clear());
 }
+
+// On-screen buttons (desktop move bar): press / release a key as if typed.
+export function virtualKey(key, on) { if (on) down.add(key); else down.delete(key); }
 
 export function isDown(key) {
   return down.has(key);
