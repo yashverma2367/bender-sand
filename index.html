@@ -162,6 +162,7 @@
     .mbtn.ult .mfill { background: #c070ff; }
     .mbtn.down { transform: translateY(1px); background: #262a36; }
     .mbtn.dead { opacity: 0.35; }
+    .fsbtn { align-self: center; min-width: 0; color: #9aa0ae; }
 
     /* ---- touch: full-screen zoomed camera while playing ---- */
     body.cam { padding: 0; }
@@ -226,6 +227,25 @@
   <div id="movebar" style="display:none"></div>
   <div id="stats"></div>
   <div id="help">arrows: move · up: jump / swim · Z signature · X heavy (hold) · C special (hold) · A power move · S dash · V ultimate (charges from damage dealt) · hold up/down to aim<br>left drag: paint · right drag: erase · scroll or [ ]: brush · H: heat view · U: fill ultimate (testing) · space: pause · ⌫: clear · K: self-destruct · P: particle hose · Esc: menu</div>
-  <script type="module" src="src/main.js"></script>
+  <!-- Always load the latest code: every module URL gets a fresh ?v= through an import map, so
+       browsers / GitHub Pages caching can't mix old and new files after an update.
+       (Add new src/*.js files to this list.) -->
+  <script>
+    (() => {
+      const v = Date.now().toString(36);
+      const files = ['abilities', 'benders', 'bot', 'clash', 'elements', 'grid', 'hud', 'info', 'input', 'juice', 'lab', 'main', 'maps',
+        'match', 'movebar', 'music', 'net-config', 'net', 'online', 'particles', 'render', 'sfx', 'signal', 'sprite', 'touch', 'ui'];
+      const imports = {};
+      for (const f of files) imports[new URL(`src/${f}.js`, location.href).href] = new URL(`src/${f}.js?v=${v}`, location.href).href;
+      const map = document.createElement('script');
+      map.type = 'importmap';
+      map.textContent = JSON.stringify({ imports });
+      document.currentScript.after(map);
+      const main = document.createElement('script');
+      main.type = 'module';
+      main.src = `src/main.js?v=${v}`;
+      map.after(main);
+    })();
+  </script>
 </body>
 </html>

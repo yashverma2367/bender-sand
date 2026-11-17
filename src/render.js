@@ -2,13 +2,13 @@
 import { EL, PALETTE, SHADES, IGNITE_T, pack } from './elements.js';
 import { FIELD } from './grid.js';
 import { BENDER_TYPES, BW, BH, MAX_HP } from './benders.js';
-import { MAX_ENERGY } from './abilities.js';
 import { drawSprite } from './sprite.js';
 import { juice } from './juice.js';
 
 const BG = PALETTE[0];
 const WIND_TINT = pack('#9fd4ff');
 const AFTERIMAGE = pack('#cfe8ff');
+const WATER_IMG = pack('#3a7fe6');
 
 // Blend two packed ABGR colors. f = 0 gives a, f = 1 gives b.
 function blend(a, b, f) {
@@ -163,13 +163,16 @@ export function createRenderer(grid, canvas) {
     if (p.invulnT > 0 && p.invulnT < 80 && (p.invulnT >> 2) % 2) return; // spawn protection blink
     // Air step afterimages: the pose at each earlier tick, in pale wind color, fading out.
     for (const ai of p.afterimages || []) {
-      const c = blend(BG, AFTERIMAGE, Math.min(0.8, ai.life / 10));
+      const c = blend(BG, ai.water ? WATER_IMG : AFTERIMAGE, Math.min(0.8, ai.life / 10));
       const pal = { H: c, S: c, E: c, B: c, T: c, L: c, C: c, F: c, D: c, K: c, Z: c, G: c };
       drawSprite({ x: ai.x, y: ai.y, facing: ai.facing, def: p.def, anim: { j: ai.j, n: 0, blink: 0, state: 'dash' } }, px, pal, false, WHITE);
     }
     const flash = p.flash > 0 && p.flash % 2 === 0;
     let pal = PLAYER_PALETTES[p.type];
-    if (p.frozenT > 0) { // frozen solid: the whole body is ice
+    if (p.waterFormT > 0) { // water form: a body of rippling water
+      const w = (k) => PALETTE[EL.WATER * SHADES + ((k + (Math.random() * 2) | 0) & 3)];
+      pal = { H: w(0), S: w(1), E: PALETTE[EL.ICE * SHADES], B: w(2), T: w(1), L: w(3), C: w(0), F: w(2), D: w(3), K: w(1), Z: w(0), G: w(2) };
+    } else if (p.frozenT > 0) { // frozen solid: the whole body is ice
       const ice = PALETTE[EL.ICE * SHADES], ice2 = PALETTE[EL.ICE * SHADES + 2];
       pal = { H: ice, S: ice, E: ice2, B: ice2, T: ice, L: ice2, C: ice, F: ice2, D: ice2, K: ice2, Z: ice, G: ice2 };
     } else if (p.flameHair) { // ascended: hair and scarf become living fire
@@ -191,7 +194,7 @@ export function createRenderer(grid, canvas) {
     // HP bar (and air bar while holding breath) above the head.
     const bx = Math.floor(p.x), by = Math.floor(p.y);
     const hx = bx - 2, len = BW + 4;
-    for (let k = -1; k <= len; k++) { px(hx + k, by - 4, DARK); px(hx + k, by - 3, DARK); }
+    for (let k = -1; k <= len; k++) px(hx + k, by - 4, DARK);
     if (p.color) { // player / team color tag above the bars
       if (!tagColors.has(p.color)) tagColors.set(p.color, pack(p.color));
       const tc = tagColors.get(p.color);
@@ -200,7 +203,6 @@ export function createRenderer(grid, canvas) {
       if (p.tag) drawTag(hx + len / 2, by - 13, p.tag, p.color);
     }
     bar(hx, by - 4, len, p.hp / MAX_HP, HP_ON);
-    bar(hx, by - 3, len, p.energy / MAX_ENERGY, ENERGY_ON);
     if (p.ult >= 100) px(hx + len, by - 4, (p.anim.t >> 3) & 1 ? ULT_ON : WHITE); // ultimate ready
     if (p.air < p.def.breath) bar(hx, by - 6, len, p.air / p.def.breath, AIR_ON);
   }

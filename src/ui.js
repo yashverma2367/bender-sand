@@ -54,7 +54,7 @@ export function buildUI(state, player, { onSelect, onClear, onPause, onHeat, onB
       mapButtons.forEach((b, id) => b.classList.toggle('active', id === state.map));
       const who = `${player.def.name} bender ` +
         (player.dead ? `· respawning`
-          : `HP ${Math.ceil(player.hp)} · energy ${Math.floor(player.energy)} · ult ${player.ult >= 100 ? 'READY' : Math.floor(player.ult) + '%'}`);
+          : `HP ${Math.ceil(player.hp)} · ult ${player.ult >= 100 ? 'READY' : Math.floor(player.ult) + '%'}`);
       stats.textContent = `${who} · ${state.fps} fps · ${state.count} cells · ${state.particles || 0} flying · brush ${state.brush}` +
         (state.paused ? ' · paused' : '') + (state.heatView ? ' · heat view' : '');
     },

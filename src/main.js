@@ -8,7 +8,7 @@ import { TOOLS, EL, WIND_TOOL, KIND, Kind } from './elements.js';
 import { createRenderer } from './render.js';
 import { Player, BENDER_TYPES, MAX_HP } from './benders.js';
 import { Particles } from './particles.js';
-import { updateAbilities, explode, creditDamage, channelInfo, MAX_ENERGY, readyMask, slotInfo } from './abilities.js';
+import { updateAbilities, explode, creditDamage, channelInfo, readyMask, slotInfo } from './abilities.js';
 import { createMoveBar } from './movebar.js';
 import * as sfx from './sfx.js';
 import { setTrack, musicState } from './music.js';
@@ -232,7 +232,7 @@ function pauseOrBack() {
 
 const touch = isTouchDevice ? createTouchControls(document.body, { onPause: () => pauseOrBack() }) : null;
 // Desktop move bar: the moves of every player on this computer, under the map.
-const moveBar = createMoveBar(document.getElementById('movebar'));
+const moveBar = createMoveBar(document.getElementById('movebar'), { onFullscreen: () => goFullscreen(!(document.fullscreenElement || document.webkitFullscreenElement)) });
 function updateMoveBar() {
   const playing = (state.mode === 'match' || state.mode === 'guest') && !isTouchDevice;
   if (!playing) { moveBar.hide(); return; }
@@ -250,12 +250,14 @@ function updateMoveBar() {
 // Matches take the whole screen (browser fullscreen); F toggles it.
 function goFullscreen(on = true) {
   if (isTouchDevice) return;
+  const el = document.documentElement, fsEl = document.fullscreenElement || document.webkitFullscreenElement;
   try {
-    if (on && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
-    else if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    if (on && !fsEl) Promise.resolve((el.requestFullscreen || el.webkitRequestFullscreen).call(el)).catch(() => {}); // (Safari: webkit-)
+    else if (!on && fsEl) Promise.resolve((document.exitFullscreen || document.webkitExitFullscreen).call(document)).catch(() => {});
   } catch { /* not supported */ }
 }
 document.addEventListener('fullscreenchange', () => layout());
+document.addEventListener('webkitfullscreenchange', () => layout());
 
 function updateTouch() { // on-screen controls only while actually playing
   if (!touch) return;
@@ -384,7 +386,7 @@ async function joinOnline(code, name, type, status) {
 function guestPlayer(v) {
   return {
     x: v.x, y: v.y, vx: v.vx, vy: v.vy, facing: v.f, type: v.t, color: v.c, tag: v.g, dead: !!v.d,
-    invulnT: v.iv, flash: v.fl, frozenT: v.fz, flameHair: !!v.fh, hp: v.hp, energy: v.en, ult: v.u, air: v.a,
+    invulnT: v.iv, flash: v.fl, frozenT: v.fz, waterFormT: v.wf, flameHair: !!v.fh, hp: v.hp, energy: v.en, ult: v.u, air: v.a,
     def: BENDER_TYPES[v.t], afterimages: v.ai, channel: v.ch ? { slot: v.ch[0], t: v.ch[1] } : null,
     anim: { j: v.an.j, n: v.an.n, rx: v.an.rx, ry: v.an.ry, state: v.an.s, t: v.an.t, blink: 0 },
   };
@@ -477,7 +479,7 @@ window.addEventListener('keydown', (e) => {
   if (GAME_KEYS.has(k) || k === ' ') e.preventDefault();
 
   if (k === 'escape') { pauseOrBack(); return; }
-  if (k === 'f' && !tools() && (state.mode === 'match' || state.mode === 'guest')) { goFullscreen(!document.fullscreenElement); return; }
+  if (k === 'f' && !tools() && (state.mode === 'match' || state.mode === 'guest')) { goFullscreen(!(document.fullscreenElement || document.webkitFullscreenElement)); return; }
   if (!tools() || BENDER_KEYS.has(k)) return;
 
   // Custom mode: painting / dev keys. (Bender controls are read from the keyboard state.)
@@ -534,12 +536,12 @@ function tick() {
 }
 
 // ---------- training ----------
-// Optional infinite mana / ultimate for you; the dummy heals after 2 s without a hit; damage within
+// Optional no-cooldowns / ultimate for you; the dummy heals after 2 s without a hit; damage within
 // 1 s of the previous hit adds up into the combo counter.
 function trainingTick(m) {
   const me = m.players[0], d = m.players[1];
   if (!me || !d) return;
-  if (m.cfg.infinite && !me.dead) { me.energy = MAX_ENERGY; me.ult = 100; }
+  if (m.cfg.infinite && !me.dead) { if (!me.channel) for (const k in me.cd) if (me.cd[k] > 2) me.cd[k] = 2; me.ult = 100; }
   m.combo = m.combo || 0; m.best = m.best || 0;
   const prev = d.trainHp ?? d.hp;
   if (!d.dead && d.hp < prev) {

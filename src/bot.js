@@ -1,5 +1,5 @@
 // CPU fighters. A bot fills the same input object a human controller would (left / right / up /
-// down / jump / held moves), so it plays by exactly the same rules: cooldowns, energy, charge
+// down / jump / held moves), so it plays by exactly the same rules: cooldowns, charge
 // times, 8-way aiming. Every tick it:
 //   1. picks the nearest enemy
 //   2. moves to its bender's preferred range (jumping walls / gaps, avoiding lava, unsticking)
@@ -20,17 +20,6 @@ export const BOT_LEVELS = {
 // Preferred distance band (cells) per bender.
 const RANGE = { fire: [45, 105], water: [35, 95], earth: [30, 85], air: [14, 60] };
 // Energy cost to start each move (mirrors abilities.js) so the bot doesn't spam failed casts.
-const COST = {
-  fire: { basic: 12, heavy: 10, special: 20, defense: 18, mobility: 8 },
-  earth: { basic: 15, heavy: 8, special: 15, defense: 18, mobility: 8 },
-  water: { basic: 12, heavy: 8, special: 28, defense: 10, mobility: 8 },
-  air: { basic: 15, heavy: 8, special: 22, defense: 8, mobility: 8 },
-};
-// Energy drained per tick while holding (mirrors abilities.js).
-const DRAIN = {
-  fire: { heavy: 0.45, mobility: 1.0 }, earth: { heavy: 0.4, mobility: 0.8 },
-  water: { heavy: 0.4, defense: 1.1, mobility: 0.9 }, air: { heavy: 0.45, defense: 0.2, mobility: 0.85 },
-};
 
 const SOLID = new Uint8Array(256);
 for (let t = 0; t < 256; t++) SOLID[t] = KIND[t] === Kind.STATIC || KIND[t] === Kind.POWDER ? 1 : 0;
@@ -153,13 +142,10 @@ export class Bot {
     return [h, v];
   }
 
-  // hold: planned hold ticks -> also needs the energy to finish the charge.
-  ready(slot, hold = 0) {
+  ready(slot) {
     const p = this.p;
     if (p.cd[slot] > 0) return false;
-    if (slot === 'ultimate') return p.ult >= 100;
-    const drain = (DRAIN[p.type][slot] || 0) * hold * (slot === 'defense' ? 1 : 0.6);
-    return p.energy >= (COST[p.type][slot] || 0) + drain + 2;
+    return slot !== 'ultimate' || p.ult >= 100;
   }
 
   // ---------- move choice ----------
@@ -171,24 +157,22 @@ export class Bot {
     const charge = (lo, hi) => Math.round(rnd(lo, hi) * L.holdFrac);
     if (t === 'fire') {
       add(dist < 110 ? 9 : 0, 'ultimate');
-      add(Math.abs(dx) < 50 && Math.abs(dy) < 14 ? 6.5 : 0, 'basic');      // flame stomp: same floor, close
+      add(Math.abs(dx) < 120 && Math.abs(dy) < 18 ? 6.5 : 0, 'basic');      // blaze wall along the floor
       add(dist < 140 && clear ? 5 : 0, 'heavy', charge(22, 48));
-      add(dist < 60 ? 4.5 : 0, 'special');                                  // flame wall up close
+      add(Math.abs(dx) < 75 && Math.abs(dy) < 16 && q.onGround ? 5.5 : 0, 'special'); // lava under them
       add(dist < 130 ? (q.type === 'water' ? 9 : 4) : 0, 'defense');       // lightning: the answer to water
     } else if (t === 'earth') {
       add(dist < 200 && q.onGround ? 9 : 0, 'ultimate');                    // continental rift under them
       add(near && q.cast ? 7 : 0, 'defense');                               // rock parry a close-range swing
-      add(dist < 95 && !(q.rootT > 0) ? 6.5 : 0, 'basic');                 // earth grip
-      add(q.rootT > 0 ? 3 : 0, 'special');                                  // held: wall up, then ram them
+      add(dist > 30 && dist < 260 && clear ? 7 : 0, 'basic');              // supersonic boulder
+      add(dist < 110 && Math.abs(dy) < 30 ? 4 : 0, 'special', charge(20, 60)); // grow an earth wall at them
       add(dist > 25 && dist < 150 && clear ? 5 : 0, 'heavy', charge(30, 58));
       add(near ? 3 : 0, 'special');
     } else if (t === 'water') {
       add(dist < 130 ? 9 : 0, 'ultimate');
-      add(dist < 120 && clear ? 6.5 : 0, 'basic');                         // water bullets
-      add(q.type === 'earth' && dist < 75 ? 8 : dist < 50 && clear ? 4 : 0, 'defense', 60); // erosion jet: the answer to earth
-      add(this.blocked > 0 && dist < 85 ? 7 : 0, 'defense', 60);           // wash away what's in the way
-      add(dist > 25 && dist < 150 && clear ? 5.5 : 0, 'heavy', charge(25, 48));
-      add(dist < 110 && Math.abs(dy) < 20 ? 6 : 0, 'special');             // tidal wave along the floor
+      add(dist > 25 && dist < 170 && clear ? 6 : 0, 'heavy', charge(25, 48)); // ice spears
+      add(dist < 200 && Math.abs(dy) < 30 && dist > 40 ? 6.5 : 0, 'special', charge(70, 150)); // charge a tidal wave
+      add(p.hp < 55 && dist < 60 && q.cast ? 6 : 0, 'defense', charge(50, 100)); // vine dome when hurt and under fire
     } else if (t === 'air') {
       add(9, 'ultimate');
       add(dist < 50 ? (q.type === 'earth' ? 8 : 4.5) : 0, 'defense');      // sonic boom: the answer to earth
@@ -246,7 +230,7 @@ export class Bot {
     // Mid-move: keep the keys held, keep aiming.
     if (this.action) {
       const a = this.action;
-      // A held move that got cut off (out of energy, stunned) or never started: let go.
+      // A held move that got cut off (max hold, stunned) or never started: let go.
       if (a.hold && ++a.age > 3 && !(p.channel && p.channel.slot === a.slot)) { this.action = null; return inp; }
       if (a.track && q) { const na = this.aimAt(dx, dy); a.aim = [na[0] || a.aim[0], na[1]]; }
       inp.held[a.slot] = true;
@@ -264,6 +248,7 @@ export class Bot {
       this.dodgeCd = 25;
       if (Math.random() < L.dodge) {
         if (p.type === 'earth' && this.ready('defense') && Math.random() < 0.6) this.action = { slot: 'defense', ticks: 2, hold: false, aim: [Math.sign(dx) || 1, 0] }; // rock parry
+        else if (p.type === 'water' && this.ready('basic') && Math.random() < 0.6) this.action = { slot: 'basic', ticks: 2, hold: false, aim: [Math.sign(dx) || 1, 0] }; // water form
         else if (p.onGround || (p.type === 'air' && !p.usedDouble)) inp.jump = true;
         else if (this.ready('mobility')) { this.action = { slot: 'mobility', ticks: 14, hold: true, age: 0, aim: [Math.random() < 0.5 ? -1 : 1, -1] }; }
         else if ((p.type === 'earth' || p.type === 'fire') && this.ready('special')) this.action = { slot: 'special', ticks: 2, hold: false, aim: [Math.sign(dx) || 1, 0] }; // wall up

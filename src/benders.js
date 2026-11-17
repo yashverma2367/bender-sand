@@ -140,6 +140,7 @@ export class Player {
     const env = this.sense();
 
     // Held by Earth's grip: can't walk or jump.
+    if (this.waterFormT > 0) this.waterFormT--;
     const rooted = this.rootT > 0;
     if (rooted) { this.rootT--; input = { ...input, jump: false, left: false, right: false }; }
     // Horizontal control (briefly weakened right after a wall jump, so the kick-off carries).
@@ -337,7 +338,7 @@ export class Player {
     const d = this.def;
     let dmg = 0;
     if (env.fire) dmg += Math.min(0.4, env.fire * 0.03) * d.fireMul;
-    if (env.lava) dmg += Math.min(2, env.lava * 0.25) * d.lavaMul;
+    if (env.lava) dmg += Math.min(0.8, env.lava * 0.15) * d.lavaMul; // up to ~48 per second standing in lava
     if (env.hot) dmg += Math.min(0.4, env.hot * 0.0003) * d.heatMul;
     if (env.steam) dmg += Math.min(0.3, env.steam * 0.02) * d.steamMul;
 
@@ -355,6 +356,8 @@ export class Player {
   // each other; freshly spawned players are briefly invulnerable. Returns the damage applied.
   damage(n, by = -1) {
     if (this.dead || n <= 0 || this.invulnT > 0) return 0;
+    if (this.waterFormT > 0 && by !== this.id) { this.waterDodged = true; return 0; } // water form: it passes through
+    if (this.domeUp && by !== this.id) return 0; // inside a vine dome
     if (this.parry && this.parry.t <= 24 && by !== this.id) { // rock parry: absorbed (and countered)
       if (this.parry.hit === null && by >= 0) this.parry.hit = by;
       return 0;

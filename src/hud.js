@@ -355,7 +355,7 @@ export function createScreens(stage, maps, handlers) {
     box.append(pickRow('You', 'type'), pickRow('Dummy', 'dummy'),
       opt('Dummy', [['dummy', 'Stands still'], ['walker', 'Walks around'], ['easy', 'Fights back (Easy CPU)']], 'mode'),
       ...(maps.length > 1 ? [opt('Map', maps.map((m) => [m.id, m.name]), 'map')] : []),
-      opt('Mana', [[true, 'Infinite mana + ultimate'], [false, 'Normal']], 'infinite'));
+      opt('Cooldowns', [[true, 'No cooldowns + ultimate'], [false, 'Normal']], 'infinite'));
     box.append(el('div', 'hint', 'combo counter on top · the dummy heals after 2 s without a hit · Esc to leave'));
     const actions = el('div', 'actions');
     actions.append(button('Back', showMain), button('Start Training', () => { hideMenu(); handlers.onStartTraining({ ...training }); }, 'primary'));

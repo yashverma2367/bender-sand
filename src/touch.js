@@ -10,9 +10,9 @@ export const isTouchDevice = (typeof window !== 'undefined') && (
   || new URLSearchParams(window.location.search).has('touch'));
 
 const MOVE_NAMES = {
-  fire: { basic: 'Stomp', heavy: 'Fireball', special: 'Wall', defense: 'Lightning', mobility: 'Dash', ultimate: 'Ascend' },
-  earth: { basic: 'Grip', heavy: 'Stones', special: 'Wall', defense: 'Parry', mobility: 'Surf', ultimate: 'Rift' },
-  water: { basic: 'Bullets', heavy: 'Spears', special: 'Wave', defense: 'Erosion', mobility: 'Riptide', ultimate: 'Cataclysm' },
+  fire: { basic: 'Blaze', heavy: 'Fireball', special: 'Lava', defense: 'Lightning', mobility: 'Dash', ultimate: 'Ascend' },
+  earth: { basic: 'Boulder', heavy: 'Stones', special: 'Wall', defense: 'Parry', mobility: 'Surf', ultimate: 'Rift' },
+  water: { basic: 'Form', heavy: 'Spears', special: 'Wave', defense: 'Dome', mobility: 'Riptide', ultimate: 'Cataclysm' },
   air: { basic: 'Blades', heavy: 'Cannon', special: 'Tornado', defense: 'Boom', mobility: 'Flight', ultimate: 'Dragon' },
 };
 // Button layout (grid cells), right thumb: ultimate top, moves around jump.

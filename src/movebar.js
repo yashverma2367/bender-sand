@@ -1,6 +1,6 @@
 // Desktop control bar under the map during a match: for every player on this computer, their
 // six moves as buttons (key + name), lit when ready, dimmed with a refill bar while cooling down,
-// red when there's not enough mana, plus the movement keys. Clicking / holding a button presses
+// plus the movement keys. Clicking / holding a button presses
 // that key, so it doubles as a mouse control.
 import { MOVES } from './info.js';
 import { KEYMAPS, virtualKey } from './input.js';
@@ -25,7 +25,7 @@ function controlsFor(source) {
   return null;
 }
 
-export function createMoveBar(el) {
+export function createMoveBar(el, { onFullscreen } = {}) {
   let sig = '';
   let cards = [];
 
@@ -62,6 +62,14 @@ export function createMoveBar(el) {
       el.append(card);
       return { btns };
     });
+    if (onFullscreen) { // a full-screen toggle next to the cards
+      const fs = document.createElement('button');
+      fs.className = 'mbtn fsbtn';
+      fs.innerHTML = '<kbd>F</kbd><span class="mname">Fullscreen</span>';
+      fs.tabIndex = -1;
+      fs.addEventListener('click', onFullscreen);
+      el.append(fs);
+    }
   }
 
   // list: [{ name, tag, color, type, source, mask, cd: {slot: 0..1 remaining}, energyLow: {slot: bool}, ult }]

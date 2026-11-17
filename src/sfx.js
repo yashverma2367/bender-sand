@@ -227,6 +227,7 @@ const RECIPES = {
     noise(p, { dur: 1.8, f: 600, f2: 50, vol: 0.55, at: 0.05, a: 0.05 });
   },
   bullet: (p) => { noise(p, { dur: 0.08, ft: 'bandpass', f: 1800, f2: 900, q: 1.5, vol: 0.18 }); tone(p, { f: 500, f2: 900, dur: 0.05, vol: 0.06 }); },
+  'water.basic': (p) => { noise(p, { dur: 0.35, ft: 'bandpass', f: 2200, f2: 600, q: 1.2, vol: 0.3 }); tone(p, { f: 900, f2: 300, dur: 0.2, type: 'triangle', vol: 0.06 }); }, // water form: a splash
   'water.special': (p) => { noise(p, { dur: 0.9, ft: 'lowpass', f: 300, f2: 1400, vol: 0.4, a: 0.15 }); noise(p, { dur: 0.6, ft: 'highpass', f: 2500, f2: 4000, vol: 0.12, at: 0.2 }); },
   wavewash: (p) => noise(p, { dur: 0.5, ft: 'bandpass', f: 600, f2: 300, q: 0.7, vol: 0.15 }),
   orbs: (p) => { tone(p, { f: 330, f2: 660, dur: 0.12, type: 'triangle', vol: 0.07 }); noise(p, { dur: 0.18, ft: 'bandpass', f: 900, f2: 2000, q: 1.2, vol: 0.12 }); },
@@ -259,9 +260,14 @@ const RECIPES = {
     impact(p, 0.45, { crack: 0.6, tail: 0 });
     noise(p, { dur: 0.6, ft: 'bandpass', f: 300, f2: 1200, q: 0.6, vol: 0.3, at: 0.04 });
   },
-  'fire.special': (p) => { // flame wall roaring up
-    noise(p, { dur: 0.8, ft: 'bandpass', f: 250, f2: 1400, q: 0.5, vol: 0.4, a: 0.05 });
-    tone(p, { f: 70, f2: 110, dur: 0.6, type: 'sawtooth', vol: 0.1, a: 0.05 });
+  'fire.special': (p) => { // lava stomp: a deep molten rumble and a sizzling hiss
+    noise(p, { dur: 1.2, ft: 'lowpass', f: 180, f2: 90, vol: 0.5, a: 0.05 });
+    noise(p, { dur: 1.0, ft: 'highpass', f: 2500, f2: 1500, vol: 0.12, a: 0.2, at: 0.1 });
+    tone(p, { f: 55, f2: 38, dur: 0.9, type: 'sawtooth', vol: 0.12 });
+  },
+  'fire.basic': (p) => { // blaze wall: a roaring whoosh of flame
+    noise(p, { dur: 0.9, ft: 'bandpass', f: 250, f2: 1400, q: 0.5, vol: 0.45, a: 0.04 });
+    tone(p, { f: 70, f2: 120, dur: 0.6, type: 'sawtooth', vol: 0.1, a: 0.05 });
   },
   'fire.mobility': (p) => { noise(p, { dur: 0.35, ft: 'bandpass', f: 400, f2: 1800, q: 0.6, vol: 0.35 }); tone(p, { f: 90, f2: 50, dur: 0.3, type: 'sawtooth', vol: 0.1 }); },
   'fire.ultimate': (p) => { // power-up scream, the explosion comes from boom
@@ -276,11 +282,11 @@ const RECIPES = {
   },
 
   // ---- earth ----
-  'earth.basic': (p) => { // earth grip: ground cracks, a stone hand grinds up
-    impact(p, 0.25, { crack: 0.6, tail: 0 });
-    noise(p, { dur: 0.3, ft: 'bandpass', f: 500, f2: 1400, q: 0.9, vol: 0.3 });
-    tone(p, { f: 70, f2: 110, dur: 0.25, vol: 0.2 });
+  'earth.basic': (p) => { // boulder tearing out of the ground
+    impact(p, 0.3, { crack: 0.7, tail: 0 });
+    noise(p, { dur: 0.35, ft: 'lowpass', f: 400, f2: 120, vol: 0.4 });
   },
+
   'earth.heavy.release': (p) => { noise(p, { dur: 0.3, ft: 'bandpass', f: 250, f2: 900, q: 0.8, vol: 0.3 }); tone(p, { f: 120, f2: 45, dur: 0.25, vol: 0.3 }); },
   'earth.special': (p) => { impact(p, 0.4, { crack: 0.5, tail: 0 }); noise(p, { dur: 0.35, f: 700, f2: 90, vol: 0.35 }); },
   'earth.defense': (p) => { // rock parry: a slab slams up
@@ -340,8 +346,10 @@ export const activeLoops = () => [...loops.keys()];
 const LOOPS = {
   'fire.heavy': { osc: 'square', f: [80, 260], ft: 'lowpass', ff: [400, 1400], vol: 0.07 },
   'earth.heavy': { noise: true, ft: 'lowpass', ff: [160, 320], vol: 0.35, trem: 7 },
+  'earth.special': { noise: true, ft: 'lowpass', ff: [120, 260], vol: 0.4, trem: 11 }, // earth wall grinding out
   'water.heavy': { osc: 'triangle', f: [500, 1300], vol: 0.06 },
-  'water.defense': { noise: true, ft: 'bandpass', ff: [2600, 2600], q: 1, vol: 0.28, trem: 30 }, // erosion jet hiss
+  'water.defense': { noise: true, ft: 'bandpass', ff: [500, 900], q: 0.8, vol: 0.14, trem: 6 }, // vine dome: creaking growth
+  'water.special': { noise: true, ft: 'lowpass', ff: [250, 900], vol: 0.25, trem: 3 }, // tidal wave gathering
   'air.heavy': { noise: true, ft: 'bandpass', ff: [300, 1500], q: 2, vol: 0.25 },
   'fire.mobility': { noise: true, ft: 'bandpass', ff: [550, 550], q: 0.6, vol: 0.28, trem: 15 },
   'water.mobility': { noise: true, ft: 'bandpass', ff: [1900, 1900], q: 1.1, vol: 0.2 },

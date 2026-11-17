@@ -172,9 +172,9 @@ export function playerVisual(p) {
   const a = p.anim;
   return {
     x: p.x, y: p.y, vx: p.vx, vy: p.vy, f: p.facing, t: p.type, c: p.color, g: p.tag | 0, d: p.dead ? 1 : 0,
-    iv: p.invulnT | 0, fl: p.flash | 0, fz: p.frozenT > 0 ? 1 : 0, fh: p.flameHair ? 1 : 0,
+    iv: p.invulnT | 0, fl: p.flash | 0, fz: p.frozenT > 0 ? 1 : 0, wf: p.waterFormT > 0 ? 1 : 0, fh: p.flameHair ? 1 : 0,
     hp: p.hp, en: p.energy, u: p.ult, a: p.air, ch: p.channel ? [p.channel.slot, p.channel.t] : 0,
     an: { j: a.j, n: a.n, rx: a.rx, ry: a.ry, s: a.state, t: a.t },
-    ai: (p.afterimages || []).map((q) => ({ x: q.x, y: q.y, j: q.j, facing: q.facing, life: q.life })),
+    ai: (p.afterimages || []).map((q) => ({ x: q.x, y: q.y, j: q.j, facing: q.facing, life: q.life, water: q.water ? 1 : 0 })),
   };
 }

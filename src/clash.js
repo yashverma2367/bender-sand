@@ -11,14 +11,14 @@
 //   register an entry every tick with callbacks (kill / set) that act on their own objects.
 import { EL, KIND, Kind } from './elements.js';
 import { BODY_W as BW, BODY_H as BH } from './sprite.js';
-import { explode, bodyAt } from './abilities.js';
+import { explode, bodyAt, iceBloom } from './abilities.js';
 import { emit } from './sfx.js';
 
 // ---------- element advantages ----------
 // ADV[a][b] = 2: a's element beats b's (doubles a's power in that clash).
 const ADV = {
   water: { fire: 2, lava: 2 },
-  fire: { earth: 2, air: 2, ice: 2 },
+  fire: { earth: 2, air: 2, ice: 2, plant: 2 },
   earth: { water: 2, air: 2, lightning: 2 },
   air: { water: 2, sand: 2 },
   sand: { fire: 2 },
@@ -26,9 +26,10 @@ const ADV = {
   lava: { ice: 2, earth: 2 },
   lightning: { water: 2 },
   sonic: { earth: 2, sand: 2 },
+  plant: { water: 2, earth: 2 },
 };
 export const advantage = (a, b) => (ADV[a] && ADV[a][b]) || 1;
-export const ELEMENT_COLORS = { sand: '#e8c070', fire: '#ff7a2a', water: '#4ea8ff', earth: '#b08850', air: '#cfe8ff', ice: '#bfefff', lava: '#ff4a1a', lightning: '#f5f07a', sonic: '#e0d0ff' };
+export const ELEMENT_COLORS = { sand: '#e8c070', fire: '#ff7a2a', water: '#4ea8ff', earth: '#b08850', air: '#cfe8ff', ice: '#bfefff', lava: '#ff4a1a', lightning: '#f5f07a', sonic: '#e0d0ff', plant: '#5ac05a' };
 
 const PROJ_SCALE = 1.4;
 
@@ -38,7 +39,8 @@ export const walls = [];       // standing walls (Flame Wall)
 let entries = [];              // all attacks this tick (natives + adapters)
 const listeners = [];
 export const onClash = (fn) => listeners.push(fn);
-export function clearClash() { projectiles.length = 0; walls.length = 0; entries = []; }
+export function clearClash() {
+  blazes.length = 0; projectiles.length = 0; walls.length = 0; entries = []; }
 
 // Adapter registration (call during a tick, before resolveClashes).
 // e: { el, form, pow, x, y, r, vx, vy, owner, team, name, kill(), set({ el, owner, team, vx, vy, pow }) }
@@ -91,9 +93,17 @@ function impact(world, p, x, y) {
     return;
   }
   explode(world, x, y, p.boomR * k, st.boom, false, true, p.owner);
+  if (p.burnSpot) blazes.push({ x, y, t: 0, r: 6 + p.boomR }); // fireball: the spot keeps burning
+  if (p.bloom) iceBloom(world, x - (p.vx || 0) * 0.3, y - (p.vy || 0) * 0.3, p.owner); // ice spear: frost bloom
   if (p.el === 'lava') for (let n = 0; n < 8; n++) world.particles.spawn(x, y, (Math.random() - 0.5) * 3, -Math.random() * 2.5, EL.LAVA, { bounces: 0, dmg: 0.3 });
   if (p.shape === 'ram') for (let n = 0; n < 14; n++) world.particles.spawn(x + (Math.random() - 0.5) * 6, y + (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 3, -Math.random() * 2, EL.STONE, { bounces: 1, dmg: 0 }); // rubble
   if (p.el === 'earth' && p.cells) for (const t of p.cells.slice(0, 6)) world.particles.spawn(x, y, (Math.random() - 0.5) * 3, -1 - Math.random() * 2, t, { bounces: 1, dmg: 0.25 });
+  if (p.boulder) { // a direct hit from a supersonic boulder: extra damage and a huge shove
+    const v = bodyAt(world, x, y, p.owner, p.r + 4);
+    if (v) { v.damage(12 * k, p.owner); const l = Math.hypot(p.vx, p.vy) || 1; v.vx += (p.vx / l) * 4; v.vy += (p.vy / l) * 4 - 1.5; }
+  }
+  if (p.pile) for (let n = 0; n < p.pile; n++) // thrown earth leaves a pile of sand and mud where it lands
+    world.particles.spawn(x + (Math.random() - 0.5) * 6, y + (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 2.2, -0.5 - Math.random() * 1.5, Math.random() < 0.6 ? EL.SAND : EL.MUD, { bounces: 0, dmg: 0 });
 }
 
 function drawProjectile(ps, p) {
@@ -133,16 +143,41 @@ export function spawnWall(o) {
   walls.push(w);
   return w;
 }
+// Moving walls (vx): roll along the ground, climbing steps up to 12 cells; a taller obstacle stops them.
+const SOLIDISH = (t) => KIND[t] === Kind.STATIC || KIND[t] === Kind.POWDER;
+function rollWall(world, w) {
+  const g = world.grid;
+  w.x += w.vx;
+  const X = Math.floor(w.x);
+  if (X < 1 || X >= g.w - 1) return false;
+  let gy = -1;
+  for (let y = Math.max(0, w.base - 12); y < Math.min(g.h, w.base + 30); y++) if (SOLIDISH(g.type[y * g.w + X])) { gy = y; break; }
+  if (gy === Math.max(0, w.base - 12)) return false; // a wall taller than a step: it breaks against it
+  if (gy > 0) w.base = gy;
+  for (let o = -w.hw; o <= w.hw; o++) { // set the ground alight; flammable things in the wall catch
+    const x = X + o;
+    if (Math.random() < 0.25 && g.inBounds(x, w.base - 1) && g.type[(w.base - 1) * g.w + x] === 0) g.set(x, w.base - 1, EL.FIRE);
+    for (let y = w.base - 1; y > w.base - w.h * 0.8; y -= 3) if (g.inBounds(x, y)) { const i = y * g.w + x; if (g.type[i] && KIND[g.type[i]] !== Kind.GAS) g.temp[i] = Math.max(g.temp[i], 450); }
+  }
+  return true;
+}
+
 function stepWalls(world) {
   for (const w of walls) {
     if (!w.alive) continue;
     w.age++;
     if (w.age > w.life || w.pow <= 3) { w.alive = false; continue; }
+    if (w.vx && !rollWall(world, w)) { // stopped by a wall: one last burst of flame
+      w.alive = false;
+      for (let k = 0; k < 30; k++) world.particles.spawn(w.x, w.base - Math.random() * w.h, -Math.sign(w.vx) * Math.random() * 2, -Math.random() * 2, EL.FIRE, { ghost: true, gravity: -0.02, life: 12 });
+      continue;
+    }
+    const HW = w.hw || 2;
     const k = Math.max(0.25, w.pow / w.pow0), h = w.h * k, top = w.base - h;
     const rise = Math.min(1, w.age / 6), ht = h * rise; // bursts up over 6 ticks
     for (let y = w.base; y > w.base - ht; y -= 1) { // a wall of roaring flame, 5 wide, licking taller in places
-      for (let o = -2; o <= 2; o++) {
-        const lick = Math.sin(y * 0.5 + w.age * 0.4 + o * 1.7) * 3; // tongues of flame along the top edge
+      for (let o = -HW; o <= HW; o++) {
+        const lick = Math.sin(y * 0.5 + w.age * 0.4 + o * 1.7) * 3 - (w.vx ? Math.abs(o) * 1.5 * Math.sign(w.vx) * Math.sign(o) : 0); // a moving wall leans into its travel // tongues of flame along the top edge
         if (y < w.base - ht + lick + 2 || Math.random() > 0.85) continue;
         world.particles.spawn(w.x + o + (Math.random() - 0.5) * 0.8, y, 0, -0.3, EL.FIRE, { ghost: true, gravity: -0.02, life: 2 });
       }
@@ -151,18 +186,42 @@ function stepWalls(world) {
     if (Math.random() < 0.5) world.particles.spawn(w.x + (Math.random() - 0.5) * 3, w.base - ht, (Math.random() - 0.5) * 0.6, -0.8, EL.SMOKE, { ghost: true, gravity: -0.02, life: 18 });
     for (const pl of world.players || []) { // enemies inside the flames burn
       if (pl.dead || pl.id === w.owner || (w.team !== null && w.team !== undefined && pl.team === w.team)) continue;
-      if (Math.abs(pl.x + BW / 2 - w.x) < 3 + BW / 2 && pl.y < w.base && pl.y + BH > w.base - ht) pl.damage(0.3 * pl.def.fireMul, w.owner); // ~18 per second inside the flames
+      if (Math.abs(pl.x + BW / 2 - w.x) < HW + 1 + BW / 2 && pl.y < w.base && pl.y + BH > w.base - ht) {
+        pl.damage(0.3 * pl.def.fireMul, w.owner); // ~18 per second inside the flames
+        if (w.burst && !(w.hit || (w.hit = new Set())).has(pl.id)) { // a rolling wall scorches and throws on contact
+          w.hit.add(pl.id); pl.damage(w.burst * Math.max(0.3, pl.def.fireMul), w.owner);
+          pl.vx = Math.sign(w.vx) * 2.4; pl.vy = Math.min(pl.vy, -2);
+        }
+      }
     }
     if (rise < 1) continue;
-    register({ el: w.el, form: 'wall', name: w.name, pow: w.pow, x: w.x, y: w.base, x2: w.x, y2: top, r: 3.5, owner: w.owner, team: w.team,
+    register({ el: w.el, form: 'wall', name: w.name, pow: w.pow, x: w.x, y: w.base, x2: w.x, y2: top, r: HW + 1.5, vx: w.vx || 0, vy: 0, owner: w.owner, team: w.team,
       kill: () => { w.alive = false; }, set: (q) => { if (q.pow !== undefined) w.pow = q.pow; } });
   }
   for (let i = walls.length - 1; i >= 0; i--) if (!walls[i].alive) walls.splice(i, 1);
 }
 
+// Burning spots left by fireballs: for 4 s, real fire keeps catching on every surface around the hit.
+const blazes = [];
+function stepBlazes(world) {
+  const g = world.grid;
+  for (let i = blazes.length - 1; i >= 0; i--) {
+    const b = blazes[i];
+    if (++b.t > 240) { blazes.splice(i, 1); continue; }
+    for (let k = 0; k < 6; k++) {
+      const X = Math.floor(b.x + (Math.random() - 0.5) * 2 * b.r), Y = Math.floor(b.y + (Math.random() - 0.5) * 2 * b.r);
+      if (!g.inBounds(X, Y + 1) || g.type[Y * g.w + X] !== 0) continue;
+      let onSurface = false; // flames cling to anything solid next to them
+      for (const [dx, dy] of [[0, 1], [1, 0], [-1, 0], [0, -1]]) if (g.inBounds(X + dx, Y + dy) && SOLIDISH(g.type[(Y + dy) * g.w + X + dx])) onSurface = true;
+      if (onSurface) g.set(X, Y, EL.FIRE);
+    }
+  }
+}
+
 // Move every native projectile (sub-stepped), hit bodies (proximity fuse) and terrain.
 export function stepProjectiles(world) {
   stepWalls(world);
+  stepBlazes(world);
   const g = world.grid;
   for (const p of projectiles) {
     if (!p.alive) continue;
@@ -178,7 +237,7 @@ export function stepProjectiles(world) {
       if (v) { impact(world, p, p.x + (v.x + BW / 2 - p.x) * 0.5, p.y + (v.y + BH / 2 - p.y) * 0.5); break; }
       if (Y >= 0 && X >= 0 && X < g.w) {
         const t = g.type[Y * g.w + X];
-        if (t !== 0 && KIND[t] !== Kind.GAS && !(p.el === 'water' && t === EL.WATER)) { impact(world, p, p.x - p.vx / n, p.y - p.vy / n); break; }
+        if (t !== 0 && KIND[t] !== Kind.GAS && !(p.el === 'water' && t === EL.WATER) && !(p.bloom && t === EL.ICE)) { impact(world, p, p.x - p.vx / n, p.y - p.vy / n); break; } // (ice spears glide through ice)
       }
     }
     if (p.alive) { drawProjectile(world.particles, p); nativeEntry(p); }
@@ -385,13 +444,26 @@ const PAIR_RULES = {
   },
   // Air vs fire: the air feeds the fire and carries it: the fire flies on in the air's direction,
   // bigger, and now belongs to whoever sent the air.
+  // Air vs fire: power decides (fire counts double against air). Usually the fire wins: it
+  // swallows the wind and burns bigger, carrying on its way. Only air that's actually stronger
+  // (a tornado, a full cannon) steals the fire: a tornado becomes a fire tornado, a blast throws
+  // the fire back at its thrower.
   'air+fire'(world, res, a, b) {
     const air = a.el === 'air' ? a : b, fire = air === a ? b : a;
     res.handled = true;
+    if (res.winner !== air) { // the fire eats the wind (a tie: both blow out)
+      kill(air);
+      if (res.cancel) { kill(fire); burst(world, res.at, 'fire', 'air'); res.text = 'the wind snuffs the fire out'; return; }
+      const grown = fire.pow0 + air.pow0 * 0.4;
+      if (fire.form !== 'beam') { fire.pow = grown; fire.set && fire.set({ pow: grown }); }
+      burst(world, res.at, 'fire', 'fire', 1.2); emit('whoosh', res.at[0]);
+      res.text = 'the fire swallows the wind and burns bigger';
+      return;
+    }
     kill(air);
     const sp = Math.hypot(fire.vx || 0, fire.vy || 0) || 8, al = Math.hypot(air.vx || 0, air.vy || 0) || 1;
     const vx = ((air.vx || 0) / al) * sp, vy = ((air.vy || 0) / al) * sp;
-    const pow = fire.pow + air.pow * 0.6;
+    const pow = fire.pow0 * 0.8;
     if (air.form === 'area') { // a tornado swallows the fire and becomes a fire tornado
       air.dead = false; kill(fire); air.set && air.set({ el: 'fire' });
       burst(world, res.at, 'fire', 'fire', 1.2); emit('whoosh', res.at[0]);
@@ -400,7 +472,7 @@ const PAIR_RULES = {
     }
     takeOver(fire, { owner: air.owner, team: air.team, vx, vy, pow, r: (fire.r || 3) * 1.3, name: 'Wind-fed fire' });
     burst(world, res.at, 'fire', 'fire', 1.2); emit('whoosh', res.at[0]);
-    res.text = 'the air feeds the fire and throws it back, bigger';
+    res.text = 'the stronger wind catches the fire and throws it back';
   },
   // Air vs water: the water is scattered into a harmless mist.
   'air+water'(world, res, a, b) {
