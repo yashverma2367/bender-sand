@@ -1,7 +1,8 @@
 // The player bender: body, physics against the grid, environment damage, death burst.
 import { Kind, KIND, EL } from './elements.js';
 import { BODY_W, BODY_H, createAnim, updateAnim } from './sprite.js';
-import { initAbilities } from './abilities.js';
+import { initAbilities, explode } from './abilities.js';
+import { splash, addDust, shatterGlass } from './physics.js';
 import { emit } from './sfx.js';
 import { hitstop, slowmo, popup } from './juice.js';
 
@@ -10,6 +11,7 @@ export const BH = BODY_H;     // collision box height in cells
 export const MAX_HP = 100;
 
 const GRAVITY = 0.08;         // cells/tick^2
+const SPLAT_V = 2.6;          // knocked faster than this into terrain = a wall-splat
 const MAX_FALL = 3.5;
 const RESPAWN_TICKS = 120;
 const SPAWN_PROTECTION = 90; // ticks of invulnerability after (re)spawning
@@ -67,6 +69,7 @@ export class Player {
   static registry = new Map(); // id -> player
   static clock = 0;            // match ticks (for "who hit me last")
   static particles = null;     // set by main: for landing / running dust
+  static world = null;         // set by main: for wall-splat blasts
 
   get def() {
     return BENDER_TYPES[this.type];
@@ -130,7 +133,8 @@ export class Player {
 
   update(input) {
     if (this.dead) {
-      if (--this.respawn <= 0) this.spawn();
+      if (this.rag) this.stepRag();
+      if (--this.respawn <= 0) { this.rag = null; this.spawn(); }
       return;
     }
     if (this.invulnT > 0) this.invulnT--;
@@ -152,7 +156,10 @@ export class Player {
     if (rooted) this.vx *= 0.5;
     if (env.submerged) speed *= d.swimmer ? 0.9 : 0.5;
     if (env.lava) speed *= 0.4;
-    this.vx += (dir * speed - this.vx) * (this.onGround ? 0.3 : this.wallLock > 0 ? 0.03 : 0.12);
+    // On ice you slide: barely any grip to speed up, stop or turn.
+    const under = this.grid.get(Math.floor(this.x + BW / 2), Math.floor(this.y) + BH);
+    this.onIce = this.onGround && under === EL.ICE;
+    this.vx += (dir * speed * (this.onIce ? 1.25 : 1) - this.vx) * (this.onGround ? (this.onIce ? 0.03 : 0.3) : this.wallLock > 0 ? 0.03 : 0.12);
     if (this.wallLock > 0) this.wallLock--;
     if (this.surfT > 0) { this.surfT--; this.vx = this.surfVX; } // earth surf carries you
 
@@ -211,8 +218,23 @@ export class Player {
 
     const impact = this.vy;
     const wasGround = this.onGround;
+    const pvx = this.vx, pvy = this.vy;
     this.moveX();
     this.moveY();
+    // Knocked hard into a wall / the floor / a ceiling: you smash into it (a crater, flying
+    // debris, a freeze-frame, extra damage credited to whoever sent you).
+    const hitRecent = this.lastHitAt !== undefined && Player.clock - this.lastHitAt < 45;
+    if (this.splatCd > 0) this.splatCd--;
+    else if (hitRecent && Player.world && !(this.dashGrace > 0)) { // (not while jetting)
+      const cx = this.x + BW / 2, cy = this.y + BH / 2;
+      if (Math.abs(pvx) > SPLAT_V && Math.abs(this.vx) < 0.05) this.splat(pvx > 0 ? this.x + BW + 1 : this.x - 1, cy, Math.abs(pvx), -Math.sign(pvx), 0);
+      else if (pvy > SPLAT_V + 0.6 && this.vy === 0) this.splat(cx, this.y + BH + 1, pvy, 0, -1);
+      else if (pvy < -SPLAT_V && this.vy === 0) this.splat(cx, this.y - 1, -pvy, 0, 1);
+    }
+    // Plunging into water throws up a splash.
+    const wet = this.grid.get(Math.floor(this.x + BW / 2), Math.floor(this.y + BH - 2)) === EL.WATER;
+    if (wet && !this.wasWet && pvy > 1.6) splash(this.x + BW / 2, this.y + BH - 2, pvy * 2.2);
+    this.wasWet = wet;
 
     // Touchdown = not grounded last tick, grounded now (the fall can end exactly on the floor
     // without moveY ever being blocked, so don't rely on that).
@@ -390,6 +412,47 @@ export class Player {
     this.dmgShow = 0; this.dmgShowT = 0;
   }
 
+  // Smashed into terrain at speed: a crater blast at the contact point (credited to the attacker),
+  // a bounce back off it, dust, a freeze-frame.
+  splat(x, y, speed, bx, by) {
+    this.splatCd = 30;
+    const r = Math.min(5, 2 + speed * 0.55);
+    shatterGlass(x, y, r * 2, 3);
+    explode(Player.world, x, y, r, 0, true, false, this.lastHitBy !== undefined ? this.lastHitBy : -1);
+    addDust(x, y, 14, 0.5);
+    hitstop(5);
+    this.vx = bx * speed * 0.35; if (by) this.vy = by * speed * 0.3;
+    emit('splat', x, 2);
+  }
+
+  // Knocked out: the body tumbles away spinning, bounces off what it hits and crashes through glass.
+  stepRag() {
+    const r = this.rag, g = this.grid;
+    if (++r.t > 160) { this.rag = null; return; }
+    const solid = (x, y) => {
+      const X = Math.floor(x), Y = Math.floor(y);
+      if (X < 0 || X >= g.w || Y >= g.h) return 2;
+      if (Y < 0) return 0;
+      const t = g.type[Y * g.w + X];
+      return t === EL.GLASS ? 3 : KIND[t] === Kind.STATIC || KIND[t] === Kind.POWDER ? 1 : 0;
+    };
+    if (!r.rest) r.vy = Math.min(4.5, r.vy + 0.12);
+    const cx = r.x + BW / 2, cy = r.y + BH / 2, R = 4;
+    const nx = cx + r.vx, sx = solid(nx + Math.sign(r.vx) * R, cy);
+    if (sx === 3) { shatterGlass(nx + Math.sign(r.vx) * R, cy, 5, 2.5); r.vx *= 0.8; r.x += r.vx; }
+    else if (sx) { r.vx *= -0.45; r.spin *= 0.6; if (Math.abs(r.vx) > 0.8) this.dust(Math.floor(nx), Math.floor(cy), 4); }
+    else r.x += r.vx;
+    const ny = cy + r.vy, sy = solid(cx, ny + Math.sign(r.vy) * R);
+    if (sy === 3) { shatterGlass(cx, ny + Math.sign(r.vy) * R, 5, 2.5); r.vy *= 0.8; r.y += r.vy; }
+    else if (sy) {
+      if (Math.abs(r.vy) > 1) { this.dust(Math.floor(cx), Math.floor(ny + R), 6); emit('land', r.x, Math.abs(r.vy)); }
+      r.vy = Math.abs(r.vy) > 0.7 ? -r.vy * 0.35 : 0; r.vx *= 0.7; r.spin *= 0.6;
+      if (r.vy === 0) r.rest = true;
+    } else { r.y += r.vy; r.rest = false; }
+    if (r.rest) { r.vx *= 0.85; const lie = Math.round(r.a / (Math.PI / 2)) * (Math.PI / 2); r.a += (lie - r.a) * 0.2; r.spin = 0; } // settles lying down
+    else r.a += r.spin;
+  }
+
   // A puff of whatever you're standing on (sand, snow, stone ...), visual only.
   dust(x, y, n) {
     const ps = Player.particles, g = this.grid;
@@ -404,6 +467,10 @@ export class Player {
 
   die() {
     this.flushDamage();
+    { // the body goes tumbling, away from whoever finished you
+      const a = Player.registry.get(this.lastHitBy), side = a && a !== this ? Math.sign(this.x - a.x) || 1 : -this.facing;
+      this.rag = { x: this.x, y: this.y, vx: this.vx * 0.8 + side * 1.6, vy: Math.min(this.vy, 0) - 2.6, a: 0, spin: side * (0.25 + Math.random() * 0.2), t: 0, rest: false };
+    }
     if (this.lastHitBy !== undefined) slowmo(28, 0.35); // a KO lands in slow motion
     this.hp = 0;
     this.dead = true;

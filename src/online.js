@@ -4,7 +4,8 @@
 // Two data channels per guest: 'ctl' (lobby, start, results, input; small JSON) and
 // 'snap' (compressed binary snapshots). Both reliable + ordered: snapshots are diffs.
 import { hostRoom, joinRoom } from './signal.js';
-import { SnapEncoder, cellCodes, windCodes, pack, unpack, inputBits, playerVisual } from './net.js';
+import { burstState } from './physics.js';
+import { SnapEncoder, cellCodes, windCodes, dustCodes, pack, unpack, inputBits, playerVisual } from './net.js';
 import { readyMask } from './abilities.js';
 
 export const MAX_PLAYERS = 4;
@@ -24,7 +25,7 @@ export class HostSession {
     this.cfg = { format: 'ffa', win: 'kos', map: 'random', customKey: 'off' };
     this.inMatch = false;
     this.room = null;
-    this.cur = { cells: new Uint16Array(grid.w * grid.h), wind: new Uint8Array(grid.fw * grid.fh) };
+    this.cur = { cells: new Uint16Array(grid.w * grid.h), wind: new Uint8Array(grid.fw * grid.fh), dust: new Uint8Array(grid.fw * grid.fh) };
   }
 
   async open() {
@@ -159,8 +160,10 @@ export class HostSession {
     if (!live.length) return;
     cellCodes(this.grid, this.cur.cells);
     windCodes(this.grid, this.cur.wind);
+    dustCodes(this.grid, this.cur.dust);
     const json = {
       p: world.players.map(playerVisual),
+      cb: burstState(),
       h: {
         clock: match.clockText(), cd: match.countdown, over: match.over, t: match.t, lives: !!match.win.lives,
         feed: match.feed.slice(-5).map((f) => ({ text: f.text, color: f.color })),

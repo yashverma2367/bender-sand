@@ -276,6 +276,15 @@ const RECIPES = {
     noise(p, { dur: 1.7, ft: 'bandpass', f: 300, f2: 3000, q: 0.5, vol: 0.3, a: 0.3 });
   },
 
+  glass: (p, size = 1) => { // shattering glass: a burst of bright little tinkles
+    noise(p, { dur: 0.12, ft: 'highpass', f: 5000, vol: 0.25 * Math.min(1.5, size) });
+    for (let k = 0; k < 6; k++) tone(p, { f: 2600 + Math.random() * 2600, f2: 2000 + Math.random() * 2000, dur: 0.06, type: 'triangle', vol: 0.05, at: 0.02 + k * 0.035 + Math.random() * 0.02 });
+  },
+  collapse: (p, size = 1) => { // a building giving way: a deep groan, cracking, a long rumble
+    tone(p, { f: 70, f2: 38, dur: 1.2, type: 'sawtooth', vol: 0.12 * Math.min(1.5, size), a: 0.1 });
+    for (let k = 0; k < 4; k++) noise(p, { dur: 0.08, ft: 'highpass', f: 1800, vol: 0.25, at: k * 0.12 + Math.random() * 0.05 });
+    noise(p, { dur: 1.6, ft: 'lowpass', f: 220, f2: 80, vol: 0.45 * Math.min(1.5, size), a: 0.2, at: 0.1 });
+  },
   train: () => { // subway horn: two-tone, then the rumble of the train
     for (const [f, at] of [[311, 0], [370, 0], [311, 0.55], [370, 0.55]]) tone(0, { f, f2: f * 0.98, dur: 0.45, type: 'sawtooth', vol: 0.08, at });
     noise(0, { dur: 2.6, f: 160, f2: 90, vol: 0.35, a: 0.8, at: 0.9 });

@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clash Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #08090c; color: #c9ccd4; font: 13px/1.5 ui-monospace, Menlo, monospace; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px; }
+  h1 { margin: 0; font-size: 15px; letter-spacing: .15em; color: #e8b04a; }
+  canvas { width: min(96vw, 1120px); aspect-ratio: 320 / 180; image-rendering: pixelated; border: 1px solid #22252f; background: #0e0f14; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; max-width: 1120px; }
+  button, select { background: #161820; color: #c9ccd4; border: 1px solid #2a2d38; border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button.on { border-color: #e8b04a; color: #fff; background: #221d12; }
+  .notes { max-width: 1120px; color: #8a8f9e; font-size: 12px; columns: 2 420px; column-gap: 28px; }
+  .notes b { color: #e8e2d0; }
+  .notes p { margin: 0 0 8px; break-inside: avoid; }
+</style>
+</head>
+<body>
+<h1>ANIME CLASH · DEMO</h1>
+<canvas id="c" width="320" height="180"></canvas>
+<div class="row">
+  <select id="pair">
+    <option value="fire,water">Fire vs Water</option>
+    <option value="earth,air">Earth vs Air</option>
+    <option value="lightning,water">Lightning vs Water</option>
+    <option value="fire,earth">Fire vs Earth</option>
+    <option value="air,fire">Air vs Fire</option>
+  </select>
+  <select id="mode">
+    <option value="beam">Beam struggle (tug of war)</option>
+    <option value="shot">Projectile clash (instant)</option>
+  </select>
+  <button id="replay" class="on">Replay</button>
+  <button id="slow">Slow motion</button>
+</div>
+<div class="row" id="layers"></div>
+<div class="notes">
+  <p><b>1 · Hit-stop + impact frame.</b> The moment they touch, time freezes for a few frames and the screen flips to a stark, high-contrast negative for 1–2 frames, then a white flash. This is the "impact frame" made famous by One Piece (Wano / Gear 5): split-second frames with exaggerated contrast that sell the hit.</p>
+  <p><b>2 · Clash sphere + tug of war.</b> In a beam struggle (Goku vs Frieza style) the contact point becomes a pulsing ball of light. It wobbles back and forth as each side pushes, the losing beam thins, and the winner's beam thickens.</p>
+  <p><b>3 · Energy splash.</b> The two energies can't pass each other, so they spray off the contact point sideways in sharp, tapered tongues, each in its owner's color, like water off a rock.</p>
+  <p><b>4 · Lightning arcs.</b> Jagged arcs crackle around the sphere while the struggle lasts, flickering every couple of frames.</p>
+  <p><b>5 · Focus lines.</b> Manga-style speed lines rush in from the edges toward the clash, pulling your eye to it.</p>
+  <p><b>6 · Rising debris + cracks.</b> The ground under the clash cracks and blocky rocks float up from the pressure (the Dragon Ball aura cliché; chunky, cube-like debris is a Yutaka Nakamura signature).</p>
+  <p><b>7 · Release: shockwave rings.</b> When one side breaks through, rings expand from the point, flattened like ellipses (drawn in perspective, as if lying on the ground), with a pillar of light, a screen shake and debris blasted outward.</p>
+  <p><b>8 · Cel-shaded dust.</b> Anime dust isn't a soft fog: it's chunky clouds with hard-edged 2–3 tone shading that billow out and roll, then thin away, with embers and smoke in the afterglow.</p>
+</div>
+<script>
+// ---------------------------------------------------------------- setup
+const W = 320, H = 180, GROUND = 150;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const img = ctx.createImageData(W, H), px = img.data;
+const COL = { fire: [255, 122, 42], water: [78, 168, 255], earth: [196, 150, 90], air: [207, 232, 255], lightning: [250, 240, 120] };
+const LAYERS = { impact: 'Impact frame', sphere: 'Clash sphere', splash: 'Energy splash', arcs: 'Lightning arcs', focus: 'Focus lines', debris: 'Rising debris', rings: 'Shockwave rings', dust: 'Cel dust' };
+const on = Object.fromEntries(Object.keys(LAYERS).map((k) => [k, true]));
+const layersEl = document.getElementById('layers');
+for (const [k, name] of Object.entries(LAYERS)) {
+  const b = document.createElement('button'); b.textContent = name; b.className = 'on';
+  b.onclick = () => { on[k] = !on[k]; b.className = on[k] ? 'on' : ''; };
+  layersEl.append(b);
+}
+let slow = false;
+document.getElementById('slow').onclick = (e) => { slow = !slow; e.target.className = slow ? 'on' : ''; };
+document.getElementById('replay').onclick = () => reset();
+document.getElementById('pair').onchange = () => reset();
+document.getElementById('mode').onchange = () => reset();
+
+// ---------------------------------------------------------------- pixel helpers
+function put(x, y, r, g, b) { x |= 0; y |= 0; if (x < 0 || y < 0 || x >= W || y >= H) return; const i = (y * W + x) * 4; px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255; }
+function add(x, y, r, g, b, a) { x |= 0; y |= 0; if (x < 0 || y < 0 || x >= W || y >= H || a <= 0) return; const i = (y * W + x) * 4; px[i] += r * a; px[i + 1] += g * a; px[i + 2] += b * a; }
+function glow(x, y, R, c, a, pow = 1.6) { // soft additive disc
+  for (let dy = -Math.ceil(R); dy <= R; dy++) for (let dx = -Math.ceil(R); dx <= R; dx++) {
+    const d = Math.hypot(dx, dy) / R; if (d > 1) continue; add(x + dx, y + dy, c[0], c[1], c[2], a * Math.pow(1 - d, pow));
+  }
+}
+function lineAdd(x0, y0, x1, y1, c, a, w0 = 1, w1 = 1) { // tapered additive stroke
+  const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
+  for (let k = 0; k <= n; k++) { const t = k / n, w = w0 + (w1 - w0) * t; glow(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, Math.max(0.6, w), c, a, 1); }
+}
+function lineSolid(x0, y0, x1, y1, c) {
+  const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
+  for (let k = 0; k <= n; k++) put(x0 + (x1 - x0) * k / n, y0 + (y1 - y0) * k / n, c[0], c[1], c[2]);
+}
+const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const WHITE = [255, 255, 255];
+const rnd = (a = 0, b = 1) => a + Math.random() * (b - a);
+
+// ---------------------------------------------------------------- static backdrop (night city)
+const back = new Uint8ClampedArray(W * H * 4);
+(function buildBack() {
+  let s = 7; const r = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = (y * W + x) * 4, k = y / GROUND;
+    let c = y < GROUND ? mix([7, 10, 22], [52, 34, 62], Math.pow(k, 2)) : (y < GROUND + 2 ? [64, 64, 70] : [40, 38, 42]);
+    back[i] = c[0]; back[i + 1] = c[1]; back[i + 2] = c[2]; back[i + 3] = 255;
+  }
+  let x = 0;
+  while (x < W) { // skyline
+    const bw = 10 + r() * 22 | 0, top = GROUND - 20 - (r() * 70 | 0);
+    for (let X = x; X < Math.min(W, x + bw); X++) for (let y = top; y < GROUND; y++) {
+      const i = (y * W + X) * 4, win = (X - x) % 4 === 2 && (y - top) % 5 === 2 && r() < 0.3;
+      const c = win ? [90, 76, 48] : [22, 24, 40];
+      back[i] = c[0]; back[i + 1] = c[1]; back[i + 2] = c[2];
+    }
+    x += bw + (r() * 4 | 0);
+  }
+  for (let k = 0; k < 80; k++) { const i = ((r() * 90 | 0) * W + (r() * W | 0)) * 4; back[i] = back[i + 1] = back[i + 2] = 140; }
+})();
+
+// ---------------------------------------------------------------- simulation
+let T, P, parts, rings, dust, debris, cracks, shake, clashX, push, winner, A, B, mode;
+const CY = 118; // height of the clash
+function reset() {
+  const [a, b] = document.getElementById('pair').value.split(',');
+  A = { el: a, c: COL[a] }; B = { el: b, c: COL[b] };
+  mode = document.getElementById('mode').value;
+  T = 0; parts = []; rings = []; dust = []; debris = []; cracks = []; shake = 0; clashX = 160; push = 0;
+  winner = Math.random() < 0.5 ? -1 : 1;
+  P = { contact: mode === 'beam' ? 40 : 34, release: mode === 'beam' ? 150 : 46, end: mode === 'beam' ? 290 : 190 };
+}
+reset();
+
+function emitSplash(x, y, side, c, n) { // tapered tongues spraying off the contact sideways (up/down) and back
+  for (let k = 0; k < n; k++) {
+    const up = Math.random() < 0.62 ? -1 : 1, a = rnd(0.25, 1.25);
+    parts.push({ kind: 'tongue', x, y, vx: -side * Math.cos(a) * rnd(1.2, 3.6), vy: up * Math.sin(a) * rnd(1.8, 4.2), c, life: rnd(14, 28), t: 0, w: rnd(1.4, 2.8) });
+  }
+}
+function step() {
+  T++;
+  const hold = T > P.contact && T <= P.contact + 6; // hit-stop: everything freezes for 6 frames
+  if (hold) return;
+  if (shake > 0) shake *= 0.86;
+  // struggle: the contact point wobbles as both sides push
+  if (T > P.contact && T < P.release) {
+    push += Math.sin(T * 0.21) * 0.5 + Math.sin(T * 0.07) * 0.3 + winner * 0.04;
+    clashX = 160 + Math.max(-40, Math.min(40, push));
+    if (on.splash) { emitSplash(clashX - 3, CY, -1, A.c, mode === 'beam' ? 5 : 0); emitSplash(clashX + 3, CY, 1, B.c, mode === 'beam' ? 5 : 0); }
+    if (on.debris && T % 2 === 0) debris.push({ x: clashX + rnd(-45, 45), y: GROUND - 2, vx: rnd(-0.1, 0.1), vy: -rnd(0.3, 0.9), s: rnd(2, 5) | 0, rise: true, t: 0 });
+    if (T % 6 === 0 && cracks.length < 14) cracks.push({ x: clashX + rnd(-6, 6), dir: Math.random() < 0.5 ? -1 : 1, len: 0, max: rnd(10, 45), wob: rnd(0, 6) });
+    shake = Math.max(shake, 1);
+  }
+  if (T === P.contact + 7) { // first contact (after the hit-stop): a burst of splash
+    if (on.splash) { emitSplash(clashX - 3, CY, -1, A.c, 26); emitSplash(clashX + 3, CY, 1, B.c, 26); }
+    shake = 4;
+  }
+  if (T === P.release) { // one side breaks through: the big release
+    shake = 8;
+    for (let k = 0; k < 3; k++) rings.push({ x: clashX, y: CY, t: -k * 4, max: 70 + k * 40 });
+    for (let k = 0; k < 40; k++) debris.push({ x: clashX + rnd(-10, 10), y: GROUND - 1, vx: rnd(-4, 4), vy: -rnd(1.5, 5), s: rnd(1, 4) | 0, rise: false, t: 0 });
+    for (const d of debris) if (d.rise) { d.rise = false; d.vx = (d.x - clashX) * 0.06 + rnd(-1, 1); d.vy = -rnd(1, 3); }
+    for (let k = 0; k < 16; k++) dust.push({ x: clashX + rnd(-12, 12), y: GROUND - rnd(0, 8), r: rnd(5, 10), vx: rnd(-1.6, 1.6), vy: -rnd(0.1, 0.6), t: 0, life: rnd(80, 130) });
+    if (on.splash) { emitSplash(clashX, CY, -1, A.c, 30); emitSplash(clashX, CY, 1, B.c, 30); }
+  }
+  // particles
+  for (const p of parts) { p.t++; p.x += p.vx; p.y += p.vy; p.vy += 0.06; p.vx *= 0.97; }
+  parts = parts.filter((p) => p.t < p.life);
+  for (const d of debris) {
+    d.t++;
+    if (d.rise) { d.y += d.vy; d.x += Math.sin(d.t * 0.1 + d.s) * 0.15; if (d.y < CY - 30) d.vy = 0; }
+    else { d.vy += 0.15; d.x += d.vx; d.y += d.vy; if (d.y > GROUND - 1) { d.y = GROUND - 1; d.vy *= -0.3; d.vx *= 0.6; } }
+  }
+  for (const r of rings) r.t++;
+  rings = rings.filter((r) => r.t < 30);
+  for (const c of cracks) c.len = Math.min(c.max, c.len + 0.8);
+  for (const d of dust) { d.t++; d.x += d.vx; d.y += d.vy; d.vx *= 0.97; d.r += 0.12; }
+  dust = dust.filter((d) => d.t < d.life);
+  if (T > P.end) reset();
+}
+
+// ---------------------------------------------------------------- drawing
+function draw() {
+  px.set(back);
+  const t = T, contact = t > P.contact, released = t >= P.release;
+  // the two attacks
+  const ax = mode === 'beam' ? 18 : 18 + Math.min(1, t / P.contact) * (clashX - 22);
+  const bx = mode === 'beam' ? 302 : 302 - Math.min(1, t / P.contact) * (302 - clashX - 4);
+  if (!released || mode === 'beam') {
+    const reach = (x0, x1, side, c) => {
+      if (mode === 'beam') { // a beam from the caster to the contact point (or the edge, after the release)
+        const end = contact ? (released ? (winner === side ? (side < 0 ? 320 : 0) : x0) : clashX) : (side < 0 ? Math.min(clashX, x0 + t * 5) : Math.max(clashX, x0 - t * 5));
+        const thick = (released ? (winner === side ? 7 : 0) : 4 + (side * (clashX - 160) < 0 ? 2 : -1) * Math.abs(clashX - 160) / 30) * (0.9 + 0.1 * Math.sin(t * 0.8));
+        if (thick > 0.3) for (let x = Math.min(x0, end); x <= Math.max(x0, end); x += 1) {
+          const wob = Math.sin(x * 0.3 + t * 0.6) * 0.6;
+          glow(x, CY + wob, thick * 1.6, c, 0.35, 1.2); glow(x, CY + wob, thick * 0.55, WHITE, 0.6, 1);
+        }
+        glow(x0, CY, 9, c, 0.7); glow(x0, CY, 4, WHITE, 0.9);
+      } else if (!contact) { // a fireball-style shot with a trail
+        for (let k = 0; k < 14; k++) glow(x1 - side * k * 2.2, CY + Math.sin(k + t) * 0.6, 5 - k * 0.3, c, 0.25);
+        glow(x1, CY, 6, c, 0.9); glow(x1, CY, 3, WHITE, 1);
+      }
+    };
+    reach(18, ax, -1, A.c); reach(302, bx, 1, B.c);
+  }
+  // cracks in the ground under the clash
+  for (const c of cracks) { let x = c.x, y = GROUND; for (let k = 0; k < c.len; k++) { x += c.dir; y = GROUND + Math.abs(Math.sin(k * 0.6 + c.wob)) * 2 | 0; put(x, y, 12, 10, 14); } }
+  // debris (blocky chunks)
+  if (on.debris) for (const d of debris) { const c = d.rise ? [160, 148, 128] : [170, 158, 138]; for (let y = 0; y < d.s; y++) for (let x = 0; x < d.s; x++) put(d.x + x, d.y + y, c[0] - y * 15, c[1] - y * 15, c[2] - y * 15); }
+  // focus lines rushing in toward the clash
+  if (on.focus && contact && t < P.release + 20) {
+    let s = (t >> 1) * 9301; const r = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+    for (let k = 0; k < 34; k++) {
+      const a = r() * Math.PI * 2, r0 = 55 + r() * 40, r1 = 160 + r() * 80;
+      lineAdd(clashX + Math.cos(a) * r0, CY + Math.sin(a) * r0, clashX + Math.cos(a) * r1, CY + Math.sin(a) * r1, WHITE, 0.16, 0.3, 1.1);
+    }
+  }
+  // clash sphere: white-hot core, each half rimmed in its side's color, pulsing
+  if (on.sphere && contact && (!released || t < P.release + 10)) {
+    const R = (mode === 'beam' ? 9 + Math.min(10, (t - P.contact) * 0.12) : 10) * (1 + 0.12 * Math.sin(t * 0.9)) * (released ? 1 + (t - P.release) * 0.25 : 1);
+    const fade = released ? 1 - (t - P.release) / 10 : 1;
+    for (let dy = -Math.ceil(R * 1.8); dy <= R * 1.8; dy++) for (let dx = -Math.ceil(R * 1.8); dx <= R * 1.8; dx++) {
+      const d = Math.hypot(dx, dy) / R; if (d > 1.8) continue;
+      const c = d < 0.6 ? WHITE : mix(WHITE, dx < 0 ? A.c : B.c, Math.min(1, (d - 0.6) * 1.2));
+      add(clashX + dx, CY + dy, c[0], c[1], c[2], fade * (d < 1 ? 1.1 : Math.pow(1 - (d - 1) / 0.8, 2) * 0.7));
+    }
+  }
+  // lightning arcs crackling around the sphere
+  if (on.arcs && contact && !released && (t & 1)) {
+    for (let k = 0; k < 3; k++) {
+      let a = rnd(0, Math.PI * 2), r = rnd(10, 16), x = clashX + Math.cos(a) * r, y = CY + Math.sin(a) * r;
+      for (let s = 0; s < 8; s++) { const nx = x + rnd(-4, 4) + Math.cos(a) * 2, ny = y + rnd(-4, 4) + Math.sin(a) * 2; lineAdd(x, y, nx, ny, [210, 220, 255], 0.9, 0.6, 0.6); x = nx; y = ny; }
+    }
+  }
+  // energy splash tongues (tapered, along their motion)
+  if (on.splash) for (const p of parts) {
+    const k = p.t / p.life, len = 4 + Math.hypot(p.vx, p.vy) * 3;
+    const l = Math.hypot(p.vx, p.vy) || 1;
+    lineAdd(p.x, p.y, p.x - (p.vx / l) * len, p.y - (p.vy / l) * len, mix(WHITE, p.c, Math.min(1, k * 1.5 + 0.2)), 0.9 * (1 - k * 0.8), p.w * (1 - k * 0.6), 0.2);
+  }
+  // shockwave rings: flattened ellipses (perspective) + a light pillar
+  if (on.rings) for (const r of rings) {
+    if (r.t < 0) continue;
+    const k = r.t / 30, rx = r.max * (1 - Math.pow(1 - k, 3)), ry = rx * 0.32, a = (1 - k) * 1.2;
+    for (let q = 0; q < 220; q++) { const ang = (q / 220) * Math.PI * 2; add(r.x + Math.cos(ang) * rx, GROUND - 2 + Math.sin(ang) * ry, 230, 240, 255, a); add(r.x + Math.cos(ang) * rx, GROUND - 3 + Math.sin(ang) * ry, 230, 240, 255, a * 0.5); }
+    if (r.t < 14) for (let y = 0; y < GROUND; y++) add(r.x, y, 255, 255, 255, (1 - r.t / 14) * 0.5 * (y / GROUND));
+  }
+  // cel-shaded dust: hard-edged 3-tone clouds
+  if (on.dust) for (const d of dust) {
+    const k = d.t / d.life; if (k > 0.85 && (d.t & 1)) continue; // breaks up as it fades
+    for (let dy = -Math.ceil(d.r); dy <= d.r; dy++) for (let dx = -Math.ceil(d.r); dx <= d.r; dx++) {
+      if (dx * dx + dy * dy > d.r * d.r) continue;
+      const light = (dx + dy) / d.r; // lit from the top-left
+      const c = light < -0.35 ? [196, 186, 168] : light < 0.4 ? [150, 140, 124] : [104, 96, 88];
+      put(d.x + dx, d.y + dy, c[0], c[1], c[2]);
+    }
+  }
+  // impact frame: the first 2 frames of contact flip to a stark negative, then a white flash
+  if (on.impact && t > P.contact && t <= P.contact + 6) {
+    const f = t - P.contact;
+    if (f <= 3) for (let i = 0; i < px.length; i += 4) { const l = (px[i] * 0.3 + px[i + 1] * 0.59 + px[i + 2] * 0.11); const v = l > 90 ? 12 : 245; px[i] = v; px[i + 1] = v * (f === 2 ? 0.85 : 1); px[i + 2] = v * (f === 2 ? 0.85 : 1); }
+    else for (let i = 0; i < px.length; i += 4) { px[i] = px[i] + (255 - px[i]) * 0.75; px[i + 1] = px[i + 1] + (255 - px[i + 1]) * 0.75; px[i + 2] = px[i + 2] + (255 - px[i + 2]) * 0.75; }
+  }
+  if (released && t < P.release + 3) for (let i = 0; i < px.length; i += 4) { px[i] += (255 - px[i]) * 0.6; px[i + 1] += (255 - px[i + 1]) * 0.6; px[i + 2] += (255 - px[i + 2]) * 0.6; }
+  ctx.putImageData(img, 0, 0);
+  cv.style.transform = shake > 0.3 ? `translate(${rnd(-shake, shake)}px, ${rnd(-shake, shake)}px)` : '';
+}
+
+let acc = 0;
+function frame() {
+  acc += slow ? 0.25 : 1;
+  while (acc >= 1) { step(); acc -= 1; }
+  draw();
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>

@@ -74,6 +74,12 @@ function applyCell(grid, i, c) {
   else if (vis === 31) grid.life[i] = 1;
   else if (vis > 0) grid.temp[i] = 350 + vis * 32 - 16;
 }
+// Hanging dust density, quantized to a byte per field cell.
+export function dustCodes(grid, out) {
+  const d = grid.dust;
+  for (let f = 0; f < out.length; f++) out[f] = d ? Math.min(255, Math.round(d[f] * 150)) : 0;
+  return out;
+}
 export function windCodes(grid, out) {
   for (let f = 0; f < out.length; f++) {
     const m = Math.abs(grid.vx[f]) + Math.abs(grid.vy[f]);
@@ -117,8 +123,9 @@ export class SnapEncoder {
   constructor(grid) {
     this.cells = new Uint16Array(grid.w * grid.h); // baseline: guest starts with an empty map
     this.wind = new Uint8Array(grid.fw * grid.fh);
+    this.dust = new Uint8Array(grid.fw * grid.fh);
   }
-  reset() { this.cells.fill(0); this.wind.fill(0); }
+  reset() { this.cells.fill(0); this.wind.fill(0); this.dust.fill(0); }
   // cur: shared per-tick codes { cells, wind }, particles, json: anything serializable.
   encode(cur, ps, json) {
     const w = new Writer();
@@ -126,6 +133,7 @@ export class SnapEncoder {
     w.u32(j.length); w.bytes(j);
     writeDiff(w, cur.cells, this.cells, true);
     writeDiff(w, cur.wind, this.wind, false);
+    writeDiff(w, cur.dust, this.dust, false);
     w.u16(ps.n);
     for (let i = 0; i < ps.n; i++) {
       w.i16(Math.round(ps.x[i] * 16)); w.i16(Math.round(ps.y[i] * 16));
@@ -145,6 +153,7 @@ export function applySnapshot(bytes, grid, ps) {
   r.p += jl;
   readDiff(r, (i, c) => applyCell(grid, i, c), true);
   readDiff(r, (f, q) => { grid.vx[f] = q * 0.5; grid.vy[f] = 0; }, false);
+  readDiff(r, (f, q) => { if (grid.dust) grid.dust[f] = q / 150; }, false);
   const n = Math.min(r.u16(), ps.max);
   for (let i = 0; i < n; i++) {
     ps.x[i] = r.i16() / 16; ps.y[i] = r.i16() / 16;
@@ -175,6 +184,7 @@ export function playerVisual(p) {
     iv: p.invulnT | 0, fl: p.flash | 0, fz: p.frozenT > 0 ? 1 : 0, wf: p.waterFormT > 0 ? 1 : 0, fh: p.flameHair ? 1 : 0,
     hp: p.hp, en: p.energy, u: p.ult, a: p.air, ch: p.channel ? [p.channel.slot, p.channel.t] : 0,
     an: { j: a.j, n: a.n, rx: a.rx, ry: a.ry, s: a.state, t: a.t },
+    rg: p.dead && p.rag ? [Math.round(p.rag.x * 10) / 10, Math.round(p.rag.y * 10) / 10, Math.round(p.rag.a * 100) / 100] : 0,
     ai: (p.afterimages || []).map((q) => ({ x: q.x, y: q.y, j: q.j, facing: q.facing, life: q.life, water: q.water ? 1 : 0 })),
   };
 }

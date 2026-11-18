@@ -13,6 +13,7 @@ import { EL, KIND, Kind } from './elements.js';
 import { BODY_W as BW, BODY_H as BH } from './sprite.js';
 import { explode, bodyAt, iceBloom } from './abilities.js';
 import { emit } from './sfx.js';
+import { clashBurst } from './physics.js';
 
 // ---------- element advantages ----------
 // ADV[a][b] = 2: a's element beats b's (doubles a's power in that clash).
@@ -276,7 +277,9 @@ const touching = (a, b) => {
 const enemies = (a, b) => a.owner !== b.owner && !(a.team !== null && a.team !== undefined && a.team === b.team);
 
 export let lastEntries = []; // the attacks from the last tick (Clash Lab power labels)
+let clashTick = 0;
 export function resolveClashes(world) {
+  clashTick++;
   const list = entries;
   lastEntries = list;
   entries = [];
@@ -334,21 +337,17 @@ function clash(world, a, b) {
       res.text ||= `${win.name} wins`;
     }
   }
+  { // every clash bursts anime-style ( > < ) along the line the two attacks met on
+    let ax = (b.x - a.x) || 0, ay = (b.y - a.y) || 0;
+    if (Math.hypot(ax, ay) < 0.5) { ax = (a.vx || 0) - (b.vx || 0); ay = (a.vy || 0) - (b.vy || 0); }
+    if (Math.hypot(ax, ay) < 0.1) { ax = 1; ay = 0; }
+    clashBurst(res.at[0], res.at[1], ax, ay, (a.pow0 || 0) + (b.pow0 || 0), ELEMENT_COLORS[a.el], ELEMENT_COLORS[b.el], a.el, b.el);
+  }
   const gone = (e) => e.dead || e.form === 'beam'; // beams always 'end' at the clash
-  if (res.cancel && gone(a) && gone(b) && !(a.form === 'beam' && b.form === 'beam')) cancelBlast(world, res, a, b); // (two beams just grind)
+  if (res.cancel && gone(a) && gone(b) && !(a.form === 'beam' && b.form === 'beam')) res.text = (res.text ? res.text + ' and ' : '') + 'explode'; // (the burst's release is the explosion)
   for (const fn of listeners) fn(res);
 }
 
-// Two attacks that destroy each other blow up where they met: size from their combined power,
-// type from the most volatile element involved. Hurts anyone close, including both throwers.
-const BLAST_TYPE = [['fire', EL.FIRE], ['lava', EL.FIRE], ['lightning', EL.FIRE], ['earth', EL.STONE], ['ice', EL.ICE], ['water', EL.WATER], ['air', 0]];
-function cancelBlast(world, res, a, b) {
-  const els = [a.el, b.el], type = (BLAST_TYPE.find(([e]) => els.includes(e)) || [0, 0])[1];
-  const r = Math.min(12, 4 + ((a.pow0 || 0) + (b.pow0 || 0)) / 10);
-  explode(world, res.at[0], res.at[1], r, type, r >= 8, true, -1);
-  emit('boom', res.at[0], r);
-  res.text = (res.text ? res.text + ' and ' : '') + 'explode';
-}
 
 // Change who owns an attack (air hijacking fire, deflecting a stone). Natives just switch owner;
 // adapters that can't (crescents, bubbles, whips ...) are replaced by a native projectile.
@@ -381,7 +380,15 @@ function fillCells(world, x, y, r, type, onlyEmpty = true) {
     g.set(X, Y, type);
   }
 }
-function steamCloud(world, at, size) { fillCells(world, at[0], at[1], Math.min(9, 3 + size / 10), EL.STEAM); emit('hiss', at[0]); }
+// (throttled per spot: a beam struggle clashes every tick, which would otherwise pump out steam
+// that condenses into a flood)
+const steamSpots = [];
+function steamCloud(world, at, size) {
+  const now = clashTick;
+  if (steamSpots.some((q) => now - q.t < 20 && Math.hypot(q.x - at[0], q.y - at[1]) < 14)) return;
+  steamSpots.push({ x: at[0], y: at[1], t: now }); if (steamSpots.length > 16) steamSpots.shift();
+  fillCells(world, at[0], at[1], Math.min(9, 3 + size / 10), EL.STEAM); emit('hiss', at[0]);
+}
 function mud(world, at) { // mud blob that falls and spreads where it lands
   for (let k = 0; k < 26; k++) world.particles.spawn(at[0] + (Math.random() - 0.5) * 6, at[1] + (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 1.5, Math.random() * 0.5, EL.MUD, { bounces: 0, dmg: 0 });
   emit('splat', at[0]);

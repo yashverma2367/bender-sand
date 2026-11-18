@@ -244,6 +244,14 @@ export class Particles {
       }
     }
 
+    // Light debris (wood, leaves, ash) hitting water floats: it settles on the surface.
+    if (ci >= 0 && g.type[ci] === EL.WATER && (t === EL.WOOD || t === EL.PLANT || t === EL.ASH)) {
+      let y = cy;
+      while (y > 0 && g.type[(y - 1) * g.w + cx] === EL.WATER) y--;
+      this.settle(i, cx, y - 1);
+      return false;
+    }
+
     // Bounce off, losing speed; settle once out of bounces or too slow.
     const speed = Math.hypot(this.vx[i], this.vy[i]);
     if (this.bounces[i] > 0 && speed > MIN_BOUNCE_SPEED) {

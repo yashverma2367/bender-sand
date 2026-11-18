@@ -4,6 +4,7 @@ import { FIELD } from './grid.js';
 import { BENDER_TYPES, BW, BH, MAX_HP } from './benders.js';
 import { drawSprite } from './sprite.js';
 import { juice } from './juice.js';
+import { bursts, hasJetMaterial, JET_ANGLE, JET_SPREAD } from './physics.js';
 
 const BG = PALETTE[0];
 const WIND_TINT = pack('#9fd4ff');
@@ -152,8 +153,16 @@ export function createRenderer(grid, canvas) {
   }
 
   const tagColors = new Map(); // css color -> packed
+  // A knocked-out body tumbling: the falling pose, rotated about its center.
+  function drawRag(p) {
+    const r = p.rag, cx = r.x + BW / 2, cy = r.y + BH / 2, ca = Math.cos(r.a), sa = Math.sin(r.a);
+    const rot = (x, y, c) => { const dx = x + 0.5 - cx, dy = y + 0.5 - cy; px(Math.floor(cx + dx * ca - dy * sa), Math.floor(cy + dx * sa + dy * ca), c); };
+    const body = { x: r.x, y: r.y, facing: p.facing, def: p.def, type: p.type, anim: { ...(p.anim || {}), state: 'fall', blink: 1 } };
+    drawSprite(body, rot, PLAYER_PALETTES[p.type], false, WHITE);
+  }
+
   function drawPlayer(p) {
-    if (p.dead) return;
+    if (p.dead) { if (p.rag && p.anim) drawRag(p); return; }
     if (p.y + BH < 0 && p.color) { // above the top of the map: a pointer in their color at the edge
       if (!tagColors.has(p.color)) tagColors.set(p.color, pack(p.color));
       const tc = tagColors.get(p.color), x = Math.round(p.x + BW / 2);
@@ -312,10 +321,101 @@ export function createRenderer(grid, canvas) {
     }
   }
 
+  // ---------- clash bursts: additive light ----------
+  // Light adds onto what's already drawn (so it glows instead of covering).
+  function addLight(x, y, r, g, b, a) {
+    x = Math.floor(x); y = Math.floor(y);
+    if (x < view.x || x >= view.x + view.w || y < view.y || y >= view.y + view.h || a <= 0) return;
+    const k = y * w + x, p = buf[k];
+    const R = Math.min(255, (p & 255) + r * a), G = Math.min(255, ((p >> 8) & 255) + g * a), B = Math.min(255, ((p >> 16) & 255) + b * a);
+    buf[k] = (255 << 24 | B << 16 | G << 8 | R) >>> 0;
+  }
+  // A soft disc of light (for strokes): stamped along a path.
+  function blob(x, y, rad, col, a) {
+    const R = Math.max(0.5, rad);
+    for (let dy = -Math.ceil(R); dy <= R; dy++) for (let dx = -Math.ceil(R); dx <= R; dx++) {
+      const d = Math.hypot(dx, dy) / (R + 0.5);
+      if (d > 1) continue;
+      const f = a * (1 - d * d);
+      addLight(x + dx, y + dy, col[0], col[1], col[2], f);
+    }
+  }
+  const WHITE3 = [255, 255, 255];
+  const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  // Deterministic randoms per (burst seed, a, b): the host and online guests draw the same thing.
+  function hrnd(seed, a, b) { let h = (seed ^ Math.imul(a + 1, 73856093) ^ Math.imul(b + 1, 19349663)) >>> 0; return () => ((h = (Math.imul(h, 1664525) + 1013904223) >>> 0) / 4294967296); }
+  function streak(x0, y0, x1, y1, col, a, w0, w1) { // tapered additive stroke
+    const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
+    for (let k = 0; k <= n; k++) { const t = k / n; blob(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, w0 + (w1 - w0) * t, col, a); }
+  }
+  function drawBursts() {
+    for (const b of bursts) {
+      const t = b.t, s = b.s, active = b.rel < 0, since = active ? -1 : t - b.rel, endT = active ? t : b.rel;
+      const A = [b.ax, b.ay]; let U = [-b.ay, b.ax]; if (U[1] > 0) U = [-U[0], -U[1]]; // along the clash / "up" across it
+      // the clash ball: small and white-hot on impact, each half rimmed in its side's color. When it
+      // throws particles (the gush on contact, and the release) it pops out quickly to a little
+      // more than its impact size, then settles back / fades.
+      if (active || since < 8) {
+        const R0 = 2 + 3 * s;                                                    // impact size
+        const pop = (tt) => (tt >= 0 && tt < 6 ? Math.sin((tt / 6) * Math.PI) * 0.4 : 0); // quick swell and back
+        const grow = active ? 1 + pop(t) : 1 + 0.4 * Math.min(1, since / 2.5);  // contact pop / release swell
+        const fade = active ? 1 : 1 - since / 8;
+        const R = R0 * grow * (1 + 0.06 * Math.sin(t * 0.9)), RR = Math.ceil(R * 1.6);
+        for (let dy = -RR; dy <= RR; dy++) for (let dx = -RR; dx <= RR; dx++) {
+          const d = Math.hypot(dx, dy) / R; if (d > 1.6) continue;
+          const c = d < 0.6 ? WHITE3 : mix3(WHITE3, dx * A[0] + dy * A[1] < 0 ? b.ca : b.cb, Math.min(1, (d - 0.6) * 1.3));
+          addLight(b.x + dx, b.y + dy, c[0], c[1], c[2], fade * (d < 1 ? 1.15 : Math.pow(1 - (d - 1) / 0.6, 2) * 0.6));
+        }
+      }
+      // > < jets: real particles for material elements (physics.js); attacks with no material
+      // (air, lightning, sonic) get their jets drawn here as light
+      const live = active || since < 8, jetEnd = active ? t : b.rel + 2;
+      for (let e = Math.max(1, jetEnd - 26); e <= jetEnd; e++) {
+        const n = e === 1 ? 10 : 4; // a burst on contact, then a steady stream
+        for (let j = 0; j < n; j++) {
+          const r = hrnd(b.seed, e, j), side = j & 1 ? 1 : -1, up = j & 2 ? 1 : -1;
+          if (hasJetMaterial(side < 0 ? b.ea : b.eb)) continue;
+          const ang = JET_ANGLE + (r() - 0.5) * JET_SPREAD;
+          const sp = (2.6 + r() * 1.6) * (0.75 + 0.3 * s), life = 14 + r() * 8, age = t - e;
+          if (age < 0 || age > life || !live && e > b.rel) continue;
+          const k = age / life, va = side * Math.cos(ang) * sp, vu = up * Math.sin(ang) * sp;
+          const vx = A[0] * va + U[0] * vu, vy = A[1] * va + U[1] * vu;
+          const x = b.x + vx * age, y = b.y + vy * age, l = Math.hypot(vx, vy) || 1, len = 5 + sp * 3.5;
+          const w = (1.1 + 1.1 * s) * (1 - k * 0.7);
+          streak(x, y, x - (vx / l) * len, y - (vy / l) * len, mix3(WHITE3, side < 0 ? b.ca : b.cb, Math.min(1, k * 1.4 + 0.15)), 0.95 * (1 - k * 0.75), w, 0.1);
+        }
+      }
+    }
+  }
+
+  // Hanging dust (grid.dust, one value per FIELD x FIELD cells): drawn over everything in the
+  // world, so fighters can disappear into a cloud for a moment.
+  const DUST = pack('#8a7f70');
+  function drawDust() {
+    const dust = grid.dust; if (!dust) return;
+    const fw = grid.fw, i0 = Math.max(0, Math.floor(view.x / FIELD)), i1 = Math.min(fw - 1, Math.floor((view.x + view.w) / FIELD));
+    const j0 = Math.max(0, Math.floor(view.y / FIELD)), j1 = Math.min(grid.fh - 1, Math.floor((view.y + view.h) / FIELD));
+    const fh = grid.fh, at = (i, j) => dust[Math.min(fh - 1, Math.max(0, j)) * fw + Math.min(fw - 1, Math.max(0, i))];
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      if (at(i, j) < 0.02 && at(i + 1, j) < 0.02 && at(i, j + 1) < 0.02 && at(i + 1, j + 1) < 0.02) continue;
+      // smooth: blend between the 4 surrounding field values (no blocky squares)
+      const d00 = at(i, j), d10 = at(i + 1, j), d01 = at(i, j + 1), d11 = at(i + 1, j + 1);
+      for (let y = j * FIELD + 2; y < j * FIELD + FIELD + 2 && y < h; y++) for (let x = i * FIELD + 2; x < i * FIELD + FIELD + 2 && x < w; x++) {
+        const fx = (x - i * FIELD - 2) / FIELD, fy = (y - j * FIELD - 2) / FIELD;
+        const d = (d00 * (1 - fx) + d10 * fx) * (1 - fy) + (d01 * (1 - fx) + d11 * fx) * fy;
+        if (d < 0.02) continue;
+        const k = y * w + x;
+        buf[k] = blend(buf[k], DUST, Math.min(0.8, d * 0.6) * (0.88 + ((x * 7 + y * 13) % 5) * 0.03)); // a little grain
+      }
+    }
+  }
+
   function present(players, particles, labels = null, owners = null) {
     if (particles) drawParticles(particles);
     const list = players ? (Array.isArray(players) ? players : [players]) : [];
     for (const p of list) drawPlayer(p);
+    drawDust();
+    drawBursts();
     drawEdgeArrows(list);
     if (!labels) drawOwnerMarks(owners, list);
     drawPopups();

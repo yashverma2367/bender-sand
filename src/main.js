@@ -10,6 +10,7 @@ import { Player, BENDER_TYPES, MAX_HP } from './benders.js';
 import { Particles } from './particles.js';
 import { updateAbilities, explode, creditDamage, channelInfo, readyMask, slotInfo } from './abilities.js';
 import { createMoveBar } from './movebar.js';
+import { initPhysics, resetPhysics, stepPhysics, setBursts } from './physics.js';
 import * as sfx from './sfx.js';
 import { setTrack, musicState } from './music.js';
 import { juice, stepJuice, resetJuice, slowmo, cinematic, ULT_NAMES } from './juice.js';
@@ -50,6 +51,8 @@ const fx = {
 };
 const world = { grid, particles, fx, player: null, players: [] };
 particles.onImpact = (x, y, r, type, owner) => explode(world, x, y, r, type, r >= 6, true, owner);
+initPhysics(world);                                                      // collapses, dust, shockwaves, splashes
+Player.world = world;
 Player.particles = particles;                                           // dust puffs
 particles.bodies = world.players;                                        // projectiles can hit benders
 particles.onHit = (attackerId, victim, dmg) => creditDamage(world, attackerId, dmg); // ...and charge the attacker's ult
@@ -79,7 +82,8 @@ canvas.style.aspectRatio = `${W} / ${H}`;
 // In matches a camera follows the action: your bender (several local players: framed together,
 // zooming out as they spread apart up to MAX_ZOOM), online guests their own bender, spectators
 // (only bots alive) everyone. Menus and Custom show the whole map.
-const MOVEBAR_H = 118;             // desktop: screen pixels kept under the map for the move bar
+const MOVEBAR_H = 118;
+const HUD_STRIP = 64;              // desktop: the strip above the map for the HUD (index.html body.play #stage)             // desktop: screen pixels kept under the map for the move bar
 const SHOW_FULL_MAP = true;        // matches show the whole city (false: a camera following you)
 const MIN_VIEW_AREA = (W * H) / 4; // at zoom 1 you always see at least a quarter of the map
 // View size (cells) for a screen of this aspect ratio: exactly a quarter of the map's area.
@@ -148,7 +152,7 @@ function layout() { // the canvas gets more room when the sandbox toolbar is hid
   const sandbox = state.mode === 'sandbox' || onlineCustom();
   const play = playingNow && !isTouchDevice && !sandbox; // full-screen match: map + move bar only
   document.body.classList.toggle('play', play);
-  const reserve = sandbox ? 290 : play ? Math.max(40, moveBar.height() || MOVEBAR_H) : isTouchDevice ? 16 : 70;
+  const reserve = sandbox ? 290 : play ? Math.max(40, moveBar.height() || MOVEBAR_H) + HUD_STRIP : isTouchDevice ? 16 : 70;
   let aspect = W / H;
   if (cam) { // desktop camera: a quarter of the map, shaped like the window
     aspect = Math.max(1.4, Math.min(3.2, (window.innerWidth - 32) / Math.max(200, window.innerHeight - reserve)));
@@ -179,6 +183,7 @@ function setPlayers(list) {
 }
 
 function useMap(m) {
+  resetPhysics();
   const { spawns, tick } = loadMap(grid, particles, m);
   state.map = m.id;
   mapTick = tick || null;
@@ -365,6 +370,7 @@ async function joinOnline(code, name, type, status) {
       if (state.mode !== 'guest') return;
       const j = applySnapshot(bytes, grid, particles);
       guestView.players = j.p.map(guestPlayer);
+      setBursts(j.cb); // clash bursts are drawn locally from the host's list
       guestView.hud = j.h;
       guestView.since = 0;
       if (j.s) for (const [n, x, sz] of j.s) playEvent(n, x, sz);
@@ -386,7 +392,7 @@ async function joinOnline(code, name, type, status) {
 function guestPlayer(v) {
   return {
     x: v.x, y: v.y, vx: v.vx, vy: v.vy, facing: v.f, type: v.t, color: v.c, tag: v.g, dead: !!v.d,
-    invulnT: v.iv, flash: v.fl, frozenT: v.fz, waterFormT: v.wf, flameHair: !!v.fh, hp: v.hp, energy: v.en, ult: v.u, air: v.a,
+    invulnT: v.iv, flash: v.fl, frozenT: v.fz, waterFormT: v.wf, rag: v.rg ? { x: v.rg[0], y: v.rg[1], a: v.rg[2] } : null, flameHair: !!v.fh, hp: v.hp, energy: v.en, ult: v.u, air: v.a,
     def: BENDER_TYPES[v.t], afterimages: v.ai, channel: v.ch ? { slot: v.ch[0], t: v.ch[1] } : null,
     anim: { j: v.an.j, n: v.an.n, rx: v.an.rx, ry: v.an.ry, state: v.an.s, t: v.an.t, blink: 0 },
   };
@@ -512,6 +518,7 @@ function tick() {
   if (tools() && mouse.down && tool() !== WIND_TOOL) grid.paint(mouse.x, mouse.y, state.brush, tool());
   grid.step();
   grid.sweepStrays(); // floating debris crumbles and falls
+  stepPhysics();      // collapsing buildings, dust, shockwaves
   if (mapTick) mapTick(grid, particles, tickCount++, mapEnv);
   if (match) match.tick();
   if (tools() && isDown('p')) hose(toolPlayer(), sandboxInput);

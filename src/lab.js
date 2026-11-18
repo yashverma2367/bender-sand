@@ -8,30 +8,26 @@ import { EL } from './elements.js';
 import { BODY_W as BW, BODY_H as BH } from './sprite.js';
 import { slowmo, juice } from './juice.js';
 
-// Attacks you can fire from the emitters.
+// Attacks you can fire from the emitters: the game's real moves, at their real speed and power
+// (speed in cells per tick; picking an attack also sets its real power).
 export const LAB_ATTACKS = {
-  fireball: { name: 'Fireball', el: 'fire', r: 3, boomR: 4.5 },
-  flamewall: { name: 'Flame Wall', el: 'fire', wall: true },
-  stone: { name: 'Stone', el: 'earth', r: 3.5, boomR: 4.5, cells: [EL.STONE, EL.STONE, EL.EARTH, EL.SAND] },
-  spear: { name: 'Ice spear', el: 'ice', r: 2.5, boomR: 4 },
-  waterball: { name: 'Water ball', el: 'water', r: 3.5, boomR: 3 },
-  airblast: { name: 'Air blast', el: 'air', r: 4, boomR: 5 },
-  lavarock: { name: 'Lava rock', el: 'lava', r: 3.5, boomR: 4.5 },
-  bullet: { name: 'Water bullet', el: 'water', r: 2, boomR: 2 },
-  shard: { name: 'Rock shard', el: 'earth', r: 2, boomR: 2.2, cells: [EL.STONE] },
-  sandblast: { name: 'Sand blast', el: 'sand', r: 5, boomR: 4 },
-  lightning: { name: 'Lightning', el: 'lightning', beam: true },
-  erosion: { name: 'Erosion Jet', el: 'water', beam: true },
-  blade: { name: 'Wind blade', el: 'air', r: 3, boomR: 2 },
-  sonic: { name: 'Sonic wave', el: 'sonic', r: 5, boomR: 5 },
+  fireball: { name: 'Fireball', el: 'fire', r: 3, boomR: 4.5, speed: 20, pow: 20, extra: { gravity: 0.012, burnSpot: true } },
+  blazewall: { name: 'Blaze Wall', el: 'fire', wall: true, pow: 45 },
+  stone: { name: 'Stone', el: 'earth', r: 3.5, boomR: 4.5, speed: 20, pow: 24, cells: [EL.STONE, EL.STONE, EL.EARTH, EL.SAND], extra: { gravity: 0.03, pile: 18 } },
+  boulder: { name: 'Boulder', el: 'earth', r: 5, boomR: 8, speed: 20, pow: 55, cells: [EL.STONE, EL.EARTH], extra: { gravity: 0.004, pile: 60, boulder: true } },
+  spear: { name: 'Ice spear', el: 'ice', r: 2.5, boomR: 3, speed: 20, pow: 22, extra: { gravity: 0.006, bloom: true } },
+  cannon: { name: 'Air cannon', el: 'air', r: 2.8, boomR: 5, speed: 20, pow: 20 },
+  blade: { name: 'Wind blade', el: 'air', r: 3, boomR: 2, speed: 6, pow: 9 },
+  sonic: { name: 'Sonic wave', el: 'sonic', r: 5, boomR: 5, speed: 6, pow: 22 },
+  tidal: { name: 'Tidal wave', el: 'water', r: 9, boomR: 4, speed: 3.2, pow: 35 },
+  lightning: { name: 'Lightning', el: 'lightning', beam: true, pow: 35 },
 };
-const POWERS = [6, 8, 9, 10, 18, 20, 22, 24, 30, 35, 40, 55, 60, 65, 80]; // includes every move's real power
-const SPEED = 6;
+const POWERS = [6, 8, 9, 10, 18, 20, 22, 24, 30, 35, 40, 45, 55, 60, 65, 80]; // includes every move's real power
 const FLOOR = 186, EMIT_Y = 150, LEFT_X = 220, RIGHT_X = 420;
 const LEFT_OWNER = 900, RIGHT_OWNER = 901; // the emitters fight each other, not the benders
 
 export function createLab({ world, getMatch }) {
-  const st = { me: 'air', active: false, left: 'fireball', lp: 20, right: 'spear', rp: 20, auto: false, dummy: false, slow: false, t: 0, log: [], beams: [] };
+  const st = { me: 'air', active: false, left: 'fireball', lp: 20, right: 'spear', rp: 22, auto: false, dummy: false, slow: false, t: 0, log: [], beams: [] };
 
   // ---------- panel ----------
   const panel = document.createElement('div');
@@ -63,6 +59,8 @@ export function createLab({ world, getMatch }) {
       <div class="lablog">${st.log.map((l) => `<div>${l}</div>`).join('') || '<div class="hint">clash results appear here</div>'}</div>`;
     panel.querySelectorAll('select').forEach((s) => { s.onchange = () => {
       const k = s.dataset.k; st[k] = k === 'lp' || k === 'rp' ? +s.value : s.value;
+      if (k === 'left' && LAB_ATTACKS[s.value].pow) st.lp = LAB_ATTACKS[s.value].pow; // real power by default
+      if (k === 'right' && LAB_ATTACKS[s.value].pow) st.rp = LAB_ATTACKS[s.value].pow;
       if (k === 'me') { const m = getMatch(); if (m && m.players[0]) m.players[0].setType(s.value); }
       s.blur(); render();
     }; });
@@ -81,8 +79,9 @@ export function createLab({ world, getMatch }) {
   function fire(key, pow, x, y, dx, dy, owner, team = null) {
     const A = LAB_ATTACKS[key];
     if (A.beam) { st.beams.push({ el: A.el, name: A.name, x, y, x2: x + dx * 260, y2: y + dy * 260, owner, team, pow, t: 0 }); return; }
-    if (A.wall) { spawnWall({ el: A.el, name: A.name, x: x + dx * 40, base: FLOOR, h: 30, pow, owner, team, life: 240 }); return; }
-    spawnProjectile({ el: A.el, name: A.name, x, y, vx: dx * SPEED, vy: dy * SPEED, pow, r: A.r, boomR: A.boomR, owner, team, cells: A.cells, life: 160 });
+    if (A.wall) { spawnWall({ el: A.el, name: A.name, x: x + dx * 12, base: FLOOR, h: 46, pow, owner, team, life: 90, vx: dx * 2.3, hw: 4, burst: 14 }); return; } // a rolling Blaze Wall
+    const sp = A.speed || 6;
+    spawnProjectile({ el: A.el, name: A.name, x, y, vx: dx * sp, vy: dy * sp, pow, r: A.r, boomR: A.boomR, owner, team, cells: A.cells, life: Math.max(40, Math.round(600 / sp)), ...(A.extra || {}) });
   }
   function fireBoth() {
     fire(st.left, st.lp, LEFT_X, EMIT_Y, 1, 0, LEFT_OWNER);

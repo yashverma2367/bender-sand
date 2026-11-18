@@ -5,7 +5,7 @@ export const CONTROLS = [
   ['Move / aim', 'Arrows (P1) · I J K L (P2) · stick · touch joystick. Attacks aim 8 ways: forward, up, down and diagonals.'],
   ['Jump', 'Up (when no attack key is held) · A on gamepad · JUMP on touch. Air benders double-jump and glide (hold Up).'],
   ['Moves', 'Z X C A S V (P1) · U O P H N M (P2) · gamepad X Y RB LB B RT.'],
-  ['Element orbs (X)', 'Hold X to form up to 3 orbs that circle you (longer hold = more). Let go and they keep orbiting while you move. Each tap of X throws one along your aim. Unused orbs fade after 7 s.'],
+  ['Element orbs (X)', 'Hold X to form up to 2 orbs that circle you (longer hold = more). Let go and they keep orbiting while you move. Each tap of X throws one along your aim. Unused orbs fade after 7 s.'],
   ['Jets', 'Hold S to fly along the arrows for up to 2 s, then it cools down.'],
   ['Cooldowns', 'No mana: every move just has a cooldown. The bar under each button refills; lit = ready.'],
   ['Ultimate', 'Purple bar: fills only by dealing damage. Full = V unleashes your ultimate.'],
@@ -15,7 +15,7 @@ export const CONTROLS = [
 export const MOVES = {
   fire: [
     ['Z', 'Blaze Wall', 'Stomp: a huge wall of fire (power 45) rolls forward along the ground. Weaker attacks passing through burn up; anyone it hits is scorched (14) and thrown. In the air: slam down first.'],
-    ['X', 'Fireballs', 'Hold to conjure up to 3 orbiting fireballs, tap X to throw each. Explode on impact or near an enemy, and the spot keeps burning for 4 s.'],
+    ['X', 'Fireballs', 'Hold to conjure up to 2 orbiting fireballs, tap X to throw each. Explode on impact or near an enemy, and the spot keeps burning for 4 s.'],
     ['C', 'Lava Stomp', 'Stomp: the ground in front of you melts into real lava out to ~80 cells. Anyone on it is scorched and keeps burning; it flows, boils water and cools back to stone.'],
     ['A', 'Lightning', 'Brief wind-up, then an instant bolt (power 35). Fire\'s answer to Water: electrifies water attacks and shocks the water bender.'],
     ['S', 'Fire Jet', 'Hold to fly on flame jets.'],
@@ -23,7 +23,7 @@ export const MOVES = {
   ],
   earth: [
     ['Z', 'Boulder', 'A huge rock tears out of the ground, then you punch it along your aim at supersonic speed (power 55). Big blast; leaves a pile of sand and mud.'],
-    ['X', 'Stones', 'Hold to rip up to 3 stones from the ground that orbit you, tap X to hurl each. Each leaves sand and mud where it lands.'],
+    ['X', 'Stones', 'Hold to rip up to 2 stones from the ground that orbit you, tap X to hurl each. Each leaves sand and mud where it lands.'],
     ['C', 'Earth Wall', 'Hold: a stone wall bursts out of the ground in front of you, grows up, and turns with the arrows. It is built from the earth behind you (ground, street, rubble) and stops when that runs out.'],
     ['A', 'Rock Parry', 'A 0.4 s counter stance behind a stone slab. Any attack that hits you in that window is absorbed and a stone pillar erupts under the attacker (14, launches them). Whiff it and you can\'t attack for 0.5 s.'],
     ['S', 'Sand Jet / Surf', 'Hold: surf a sand wave on the ground, or jet through the air.'],
@@ -31,7 +31,7 @@ export const MOVES = {
   ],
   water: [
     ['Z', 'Water Form', 'For 1/3 s your body turns to water: every attack passes straight through you. Time it right as a hit lands to get the cooldown back.'],
-    ['X', 'Ice Spears', 'Hold for up to 3 orbiting ice spears, tap X to fire each. Each hit bursts into a frost bloom of real ice spikes that freeze anyone they reach (0.7 s); a spear into a frozen enemy shatters them (+12).'],
+    ['X', 'Ice Spears', 'Hold for up to 2 orbiting ice spears, tap X to fire each. Each hit bursts into a frost bloom of real ice spikes that freeze anyone they reach (0.7 s); a spear into a frozen enemy shatters them (+12).'],
     ['C', 'Tidal Wave', 'Hold: pull in every bit of water nearby (further the longer you hold). Release: a wave sized by it crashes forward, pulverizing walls and ground in its path and growing from the rubble.'],
     ['A', 'Vine Dome', 'Hold: plants weave a dome around you and nothing that hits you does damage. Fire burns it, attacks of power 50+ tear it down; it regrows while held. You can\'t move inside.'],
     ['S', 'Riptide', 'Hold to fly on a water jet. Faster and cheaper from inside water.'],
@@ -39,7 +39,7 @@ export const MOVES = {
   ],
   air: [
     ['Z', 'Wind Blades', 'Two fast crescents of air along your aim (power 9 each, 5 dmg + a shove). Air beats water: they scatter water attacks into mist. (Fire beats air: a blade just feeds a fireball.)'],
-    ['X', 'Air Cannons', 'Hold to compress up to 3 orbiting air balls, tap X to fire each: bursts into a wind shockwave.'],
+    ['X', 'Air Cannons', 'Hold to compress up to 2 orbiting air balls, tap X to fire each: bursts into a wind shockwave.'],
     ['C', 'Tornado', 'Aimable: travels along the ground, flies diagonally, or carries you up (Down).'],
     ['A', 'Sonic Boom', 'A quick wind-up, then a supersonic shockwave cone (power 22, sonic beats earth: x2 vs stone, but a Boulder plows through). Shatters stone attacks, pulverizes rock to sand, blasts enemies away (10-18) and stuns 0.5 s. Air\'s answer to Earth.'],
     ['S', 'Air Flight', 'Hold to ride the wind, leaving afterimages.'],
@@ -49,12 +49,18 @@ export const MOVES = {
 
 // [name, how, result, bender or null for anyone / the world]
 export const COMBOS = [
+  ['Bring It Down', 'Blast out the bottom walls of a building', 'Anything left without support falls: the floors above crash down, crushing whoever is under them.', null],
+  ['Wall Splat', 'Knock someone hard into a wall, floor or ceiling', 'They smash into it: a crater, flying debris and extra damage for you.', null],
+  ['Live Wire', 'Lightning (Fire A) on steel', 'The whole girder, skybridge, crane or lamp post goes live: anyone touching it is shocked and stunned.', 'fire'],
+  ['Ice Rink', 'Frost Bloom / ice on the ground', 'Ice is slippery: benders slide, and knockback carries much further.', 'water'],
+  ['Catch & Return', 'Hold Stones (Earth X) while rubble flies', 'Flying debris from any blast is caught mid-air and becomes your stones.', 'earth'],
+  ['Burning Building', 'Fire into a building', 'Floorboards and furniture catch: the fire climbs floor to floor and smoke fills the rooms. Water puts it out.', 'fire'],
   ['Bridge', 'Earth Wall (C) aimed sideways or up', 'Steer it into a walkway or a ramp to climb buildings.', 'earth'],
   ['Shatter', 'Ice Spear (X) → Ice Spear', 'The first spear\'s frost bloom freezes them, the second shatters the ice for +12.', 'water'],
   ['Wave Rider', 'Tidal Wave (C) → Riptide (S) inside it', 'Riptide is faster and cheaper from inside water: ride your own wave in.', 'water'],
   ['Flood the City', 'Tidal Wave (C) held near the harbor, fountain or sewer', 'More water in reach = a bigger wave that cuts through whole buildings.', 'water'],
   ['Slip Through', 'Water Form (Z) as a boulder, spear or blast hits you', 'It passes through you and you get the move back.', 'water'],
-  ['Volley', 'Hold X for 3 orbs → jet or jump into position → tap X three times', 'Three shots from three angles while you move, before they can react.', null],
+  ['Volley', 'Hold X for 2 orbs → jet or jump into position → tap X twice', 'Two supersonic shots from two angles while you move.', null],
   ['Shocking Water', 'Lightning (Fire A) into water', 'The whole connected body of water is electrified: anyone in it gets shocked.', 'fire'],
   ['Dig Out', 'Earth Wall (C) on the street', 'The street behind you is sucked into the wall: you open a hole down into the subway.', 'earth'],
   ['Counter Juggle', 'Rock Parry (A) → Stones (X) while they fly', 'The counter pillar launches them: hurl stones at them in the air.', 'earth'],

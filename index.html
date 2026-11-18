@@ -143,6 +143,12 @@
     body.play { padding: 0; gap: 0; height: 100vh; overflow: hidden; justify-content: center; }
     body.play h1 { display: none; }
     body.play #game { border: 0; }
+    /* the HUD lives in a strip above the map, not on top of it */
+    body.play #stage { padding-top: 64px; }
+    body.play .cards { top: 4px; }
+    body.play .clock { top: 6px; font-size: 13px; }
+    body.play .feed { top: 26px; left: 50%; right: auto; transform: translateX(-50%); text-align: center; font-size: 10px; line-height: 1.25; }
+    body.play .feed div:nth-last-child(n+3) { display: none; }
     #movebar { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; padding: 8px 10px; width: 100%; }
     .mcard { border-top: 3px solid var(--c); background: #10121a; border-radius: 6px; padding: 5px 8px 7px; display: flex; flex-direction: column; gap: 5px; }
     .mhead { display: flex; gap: 10px; align-items: baseline; font-size: 11px; color: #8a8f9e; }
@@ -234,7 +240,7 @@
     (() => {
       const v = Date.now().toString(36);
       const files = ['abilities', 'benders', 'bot', 'clash', 'elements', 'grid', 'hud', 'info', 'input', 'juice', 'lab', 'main', 'maps',
-        'match', 'movebar', 'music', 'net-config', 'net', 'online', 'particles', 'render', 'sfx', 'signal', 'sprite', 'touch', 'ui'];
+        'match', 'movebar', 'music', 'net-config', 'net', 'online', 'particles', 'physics', 'render', 'sfx', 'signal', 'sprite', 'touch', 'ui'];
       const imports = {};
       for (const f of files) imports[new URL(`src/${f}.js`, location.href).href] = new URL(`src/${f}.js?v=${v}`, location.href).href;
       const map = document.createElement('script');

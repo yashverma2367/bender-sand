@@ -85,17 +85,27 @@ const PLATFORM_Y = 297;      // station ledges (clear of the train's roof)
 // with a parapet. mat = wall material; glassy = big windows (office towers).
 function building(g, x0, x1, floors, mat, glassy = false) {
   const top = STREET - floors * FH, wall = glassy ? 2 : 3;
-  ROOMS.push([x0, top - 3, x1, STREET, mat === EL.BRICK ? '#2a1d1c' : mat === EL.STEEL ? '#1a2130' : '#24252b', true]);
+  ROOMS.push([x0, top - 3, x1, STREET, mat === EL.BRICK ? '#4a3632' : mat === EL.STEEL ? '#2e3a50' : '#3e4048', true]);
   rect(g, x0, top, x0 + wall, STREET, mat);
   rect(g, x1 - wall, top, x1, STREET, mat);
   rect(g, x0, top, x1, top + 3, mat === EL.STEEL ? EL.CONCRETE : mat);           // roof
   rect(g, x0, top - 3, x0 + 3, top, mat); rect(g, x1 - 3, top - 3, x1, top, mat); // parapet
   for (let f = 0; f < floors; f++) {
     const base = STREET - f * FH;
-    if (f > 0) { // floor slab with a stairwell gap
+    let surface = STREET, gx = -99;
+    if (f > 0) { // floor slab with a stairwell gap, wooden floorboards on top (they burn)
       rect(g, x0 + wall, base - 2, x1 - wall, base, EL.CONCRETE);
-      const gx = f % 2 ? x0 + wall + 3 : x1 - wall - 17;
-      rect(g, gx, base - 2, gx + 14, base, 0);
+      gx = f % 2 ? x0 + wall + 3 : x1 - wall - 17;
+      rect(g, x0 + wall, base - 3, x1 - wall, base - 2, EL.WOOD);
+      rect(g, gx, base - 3, gx + 14, base, 0);
+      surface = base - 3;
+    }
+    // low wooden furniture (tables / benches, 2 high so you can step over them): fire spreads
+    // through a burning building along the floorboards and furniture
+    for (let x = x0 + wall + 6; x < x1 - wall - 10; x += 22) {
+      if (x + 9 > gx - 2 && x < gx + 16) continue;
+      rect(g, x, surface - 2, x + 8, surface - 1, EL.WOOD);
+      rect(g, x, surface - 1, x + 1, surface, EL.WOOD); rect(g, x + 7, surface - 1, x + 8, surface, EL.WOOD);
     }
     if (f === 0) { // doors at street level
       rect(g, x0, STREET - 15, x0 + wall, STREET, 0);
@@ -151,10 +161,10 @@ const hexMix = (a, b, k) => { // mix two '#rrggbb' colors -> packed
 };
 function cityBackdrop(g, rooms) {
   const bd = new Uint32Array(g.w * g.h), r = rng(99);
-  const sky = Array.from({ length: STREET }, (_, y) => y < 150 ? hexMix('#070a16', '#141632', y / 150) : hexMix('#141632', '#3a2440', (y - 150) / (STREET - 150)));
-  for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) bd[y * g.w + x] = y < STREET ? sky[y] : pack('#0c0d12');
-  for (let k = 0; k < 260; k++) { const x = (r() * g.w) | 0, y = (r() * 160) | 0; bd[y * g.w + x] = pack(r() < 0.8 ? '#5a5f78' : '#a8acc8'); } // stars
-  const far = pack('#191b2e'), far2 = pack('#121424'), lit = pack('#5a4a30'), lit2 = pack('#34405a');
+  const sky = Array.from({ length: STREET }, (_, y) => y < 150 ? hexMix('#1c2544', '#34406e', y / 150) : hexMix('#34406e', '#6a4c74', (y - 150) / (STREET - 150)));
+  for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) bd[y * g.w + x] = y < STREET ? sky[y] : pack('#1c1d24');
+  for (let k = 0; k < 260; k++) { const x = (r() * g.w) | 0, y = (r() * 160) | 0; bd[y * g.w + x] = pack(r() < 0.8 ? '#8a90b0' : '#d0d4ec'); } // stars
+  const far = pack('#3a3f60'), far2 = pack('#2c3150'), lit = pack('#a08850'), lit2 = pack('#6a7aa0');
   for (const [layer, col, hMin, hMax] of [[0, far2, 60, 190], [1, far, 30, 120]]) { // two skyline layers
     let x = 0;
     while (x < g.w) {
@@ -184,7 +194,7 @@ export const MAPS = [
     // a park with a fountain under a steel skybridge, an office tower, a construction site with
     // a crane, more towers on the far side. Under the street: a subway tunnel with two stations,
     // stairs and vent shafts up to the street, a flooded sewer below. A train runs through the
-    // tunnel every ~25 s (horn + flashing lights first) and plows anyone on the tracks.
+    // tunnel (horn + flashing lights first) and plows anyone on the tracks (off: SUBWAY_TRAIN).
     build(g) {
       const r = rng(2077);
       ROOMS = [];
@@ -255,11 +265,11 @@ export const MAPS = [
       for (const lx of [204, 280, 384, 502, 782, 922, 1020, 1046]) lamp(g, lx);
       for (const cx of [330, 960 + 60, 702 - 40]) car(g, cx);
       cityPatterns(g);
-      ROOMS.push([104, TUNNEL_TOP, 1172, TUNNEL_BOT, '#1a1c24', false], [560, TUNNEL_BOT + 8, 700, g.h - 4, '#101820', false], [626, TUNNEL_BOT, 636, TUNNEL_BOT + 8, '#101820', false]);
-      ROOMS.push([298, STREET, 320, TUNNEL_TOP, '#1a1c24', false], [838, STREET, 860, TUNNEL_TOP, '#1a1c24', false], [560, STREET, 570, TUNNEL_TOP, '#1a1c24', false], [1062, STREET, 1072, TUNNEL_TOP, '#1a1c24', false]);
+      ROOMS.push([104, TUNNEL_TOP, 1172, TUNNEL_BOT, '#2c2f3a', false], [560, TUNNEL_BOT + 8, 700, g.h - 4, '#1e2a36', false], [626, TUNNEL_BOT, 636, TUNNEL_BOT + 8, '#1e2a36', false]);
+      ROOMS.push([298, STREET, 320, TUNNEL_TOP, '#2c2f3a', false], [838, STREET, 860, TUNNEL_TOP, '#2c2f3a', false], [560, STREET, 570, TUNNEL_TOP, '#2c2f3a', false], [1062, STREET, 1072, TUNNEL_TOP, '#2c2f3a', false]);
       g.backdrop = cityBackdrop(g, ROOMS);
       { // tunnel wall tiles + a stripe, station signs
-        const bd = g.backdrop, tile = pack('#20232c'), stripe = pack('#2c4a6a'), sign = pack('#c9a227');
+        const bd = g.backdrop, tile = pack('#353946'), stripe = pack('#3c628a'), sign = pack('#c9a227');
         for (let y = TUNNEL_TOP; y < TUNNEL_BOT; y++) for (let x = 104; x < 1172; x++) {
           const i = y * g.w + x;
           if (y >= TUNNEL_TOP + 8 && y < TUNNEL_TOP + 11) bd[i] = stripe;
@@ -268,12 +278,15 @@ export const MAPS = [
         for (const sx of [300, 840]) for (let y = TUNNEL_TOP + 13; y < TUNNEL_TOP + 17; y++) for (let x = sx + 12; x < sx + 52; x++) bd[y * g.w + x] = sign;
       }
       this.train = { t: 0, next: 900, x: null, dir: 1 };
-      return { spawns: [60, 340, 600, 970, 1120, 240], tick: (grid, ps, t, env) => subwayTick(this.train, grid, ps, env) };
+      const tick = SUBWAY_TRAIN ? (grid, ps, t, env) => subwayTick(this.train, grid, ps, env) : null;
+      return { spawns: [60, 340, 600, 970, 1120, 240], tick };
     },
   },
 ];
 
 // ---------- subway train ----------
+// Switched off (players found it annoying). Set to true to bring the train back.
+const SUBWAY_TRAIN = false;
 // Every 20-30 s a train runs the length of the tunnel (direction alternates). Two seconds
 // before, the station lights flash red and a horn sounds. It is built out of real cells (so it
 // shows up online and plows debris) and slams anyone on the tracks (25 + a big launch).
