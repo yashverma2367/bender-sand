@@ -343,7 +343,7 @@ const KITS = {
     // you punch it along your aim at supersonic speed (a sonic boom rings off it): power 55,
     // a big blast, and it leaves a pile of sand and mud where it lands.
     basic: {
-      cooldown: 150, pose: 'lift', poseTime: BOULDER_WINDUP,
+      cooldown: 300, pose: 'lift', poseTime: BOULDER_WINDUP,
       cast(c) {
         const p = c.p;
         p.boulder = { t: 0, cells: takeGround(c, 40, c.center) };
@@ -1620,10 +1620,17 @@ function gatherRing(c, r, band, max) {
 }
 
 // ---------- tidal wave ----------
-const TIDE_SPEED = 3.2, TIDE_TICKS = 70, TIDE_H = 26, TIDE_LEN = 22, TIDE_MAXVOL = 4000;
+const TIDE_SPEED = 3.2, TIDE_H = 26, TIDE_LEN = 22, TIDE_MAXVOL = 4000;
 // The wave's size grows with the water (and rubble) it carries: ~0 = small, 1200+ = 3.4x.
 const tideScale = (vol) => 0.7 + Math.min(2.7, vol / 450);
 const TIDE_KEEPS = new Set([EL.STEEL]); // what a wave can't break
+// How far it rolls: bigger waves travel further (and keep growing their range as they grow).
+const tideLife = (sc) => Math.round(40 + 30 * sc); // ~60 ticks small .. ~140 ticks huge
+// Chance per tick that the crest breaks a cell it's pushing against: loose stuff goes easily,
+// hard rock and concrete only in chunks (it carves portions, it doesn't sweep the map clean).
+const TIDE_BREAK = (t) => KIND[t] === Kind.POWDER ? 0.45 : KIND[t] === Kind.LIQUID ? 0.3
+  : t === EL.GLASS || t === EL.WOOD || t === EL.PLANT || t === EL.BRICK || t === EL.ASPHALT ? 0.16 : 0.07;
+const TIDE_CARRY_MAX = 2500;
 
 // Pull real water cells within r of the bender into the move (up to max): they vanish from the
 // map and stream toward your hands. Returns how many were taken.
@@ -1646,13 +1653,16 @@ function tidesOngoing(c) {
     w.t++;
     w.peak = Math.max(w.peak || 0, w.vol); // size follows the most water it has carried (it lays water down as it goes)
     const sc = tideScale(w.peak), LEN = Math.round(TIDE_LEN * (0.6 + 0.4 * sc));
-    const k = 1 - w.t / TIDE_TICKS, H = TIDE_H * sc * Math.min(1, w.t / 5) * (k > 0.35 ? 1 : 0.35 + k * 1.85); // rises, holds, collapses at the end
+    w.life = Math.max(w.life || 0, tideLife(sc)); w.carry = w.carry || [];
+    const life = w.life, k = 1 - w.t / life, H = TIDE_H * sc * Math.min(1, w.t / 5) * (k > 0.35 ? 1 : 0.35 + k * 1.85); // rises, holds, collapses at the end
     w.x += w.dir * TIDE_SPEED;
     const X = Math.floor(w.x);
     if (X < 1 || X >= g.w - 1) return false;
-    // Pulverize: everything solid in front of / inside the wave, up to its height, is smashed and
-    // swallowed (it grows). It rolls along its own floor, so walls are cut, not climbed.
-    for (let o = -6; o < 4; o++) {
+    // Smash: the crest breaks chunks out of whatever it pushes against (loose stuff easily, hard
+    // rock and concrete only in pieces), and the broken material is swept INTO the wave: it is
+    // carried along (the wave grows) and dumped where the wave breaks.
+    const brk = Math.max(0.4, Math.min(1.3, sc / 2));
+    for (let o = -4; o < 2; o++) {
       const col = Math.floor(w.x - w.dir * o);
       if (col < 0 || col >= g.w) continue;
       for (let y = 1; y <= H; y++) {
@@ -1660,9 +1670,11 @@ function tidesOngoing(c) {
         if (Y < 0) break;
         const i = Y * g.w + col, t = g.type[i];
         if (t === 0 || t === EL.WATER || KIND[t] === Kind.GAS || TIDE_KEEPS.has(t)) continue;
+        if (Math.random() > TIDE_BREAK(t) * brk) continue;
         g.type[i] = 0; g.temp[i] = AMBIENT; g.life[i] = 0;
-        w.debris++; if (w.vol < TIDE_MAXVOL) w.vol += 0.6;
-        if (Math.random() < 0.12) c.ps.spawn(col, Y, w.dir * (2 + Math.random() * 2), -Math.random() * 2, t, { ghost: true, gravity: 0.1, life: 14 }); // churned rubble
+        w.debris++; if (w.carry.length < TIDE_CARRY_MAX) w.carry.push(t);
+        if (w.vol < TIDE_MAXVOL) w.vol += 0.6;
+        if (Math.random() < 0.15) c.ps.spawn(col, Y, w.dir * (2 + Math.random() * 2), -Math.random() * 2, t, { ghost: true, gravity: 0.1, life: 14 }); // churned rubble
       }
     }
     const gy = groundBelow(g, X, w.y - 12);
@@ -1690,11 +1702,15 @@ function tidesOngoing(c) {
       }
     }
     // Rubble tumbling inside the wave.
-    for (let q = 0; q < Math.min(8, w.debris / 40); q++) c.ps.spawn(w.x - w.dir * Math.random() * LEN, gy - Math.random() * H * 0.8, w.dir * 1.5, -0.3, Math.random() < 0.5 ? EL.SAND : EL.STONE, { ghost: true, gravity: 0, life: 2 });
-    if (w.t === TIDE_TICKS - 1) for (let q = 0; q < Math.min(260, w.debris / 3); q++) // it collapses: the rubble settles as mud and sand
-      c.ps.spawn(w.x - w.dir * Math.random() * LEN, gy - Math.random() * H * 0.5, w.dir * Math.random() * 2, 0.5, Math.random() < 0.6 ? EL.MUD : EL.SAND, { bounces: 0, dmg: 0 });
+    // The debris it carries tumbles inside the wave (what it actually picked up).
+    for (let q = 0; q < Math.min(10, w.carry.length / 25); q++) c.ps.spawn(w.x - w.dir * Math.random() * LEN, gy - Math.random() * H * 0.8, w.dir * 1.5, -0.3, w.carry[(Math.random() * w.carry.length) | 0], { ghost: true, gravity: 0, life: 2 });
+    if (w.carry.length && Math.random() < 0.5) { // a little of it drops out along the way
+      const t = w.carry.splice((Math.random() * w.carry.length) | 0, 1)[0];
+      c.ps.spawn(w.x - w.dir * LEN * Math.random(), gy - H * 0.3, -w.dir * 0.5, 0.5, t, { bounces: 0, dmg: 0 });
+    }
+    if (w.t === life - 1) dumpCarry(c, w, gy, LEN, H); // it breaks: everything it carried comes down
     // It lays its water back down behind it as it travels (nothing is lost).
-    const drop = Math.min(w.vol, Math.max(1, Math.round(w.vol / (TIDE_TICKS - w.t + 1))));
+    const drop = Math.min(w.vol, Math.max(1, Math.round(w.vol / (life - w.t + 1))));
     for (let q = 0; q < Math.min(drop, 20); q++) c.ps.spawn(w.x - w.dir * (LEN * 0.6 + Math.random() * LEN * 0.4), gy - H * Math.random() * 0.6, -w.dir * 0.4, 0.5, EL.WATER, { bounces: 0, dmg: 0 });
     w.vol = Math.max(0, w.vol - Math.min(drop, 20));
     if (w.t % 2 === 0 && w.vol < 1) c.ps.spawn(w.x - w.dir * 8, gy - H * 0.5, -w.dir * 0.4, 0.5, EL.WATER, { bounces: 0, dmg: 0 });
@@ -1709,8 +1725,26 @@ function tidesOngoing(c) {
     register({ el: 'water', form: 'wave', name: 'Tidal Wave', pow: 35 * sc * (0.5 + 0.5 * k), x: w.x - w.dir * 3, y: gy - H / 2, r: Math.max(5, H / 2), vx: w.dir * TIDE_SPEED, vy: 0,
       owner: p.id, team: p.team, kill: () => { w.dead = true; }, set: (q) => { if (q.vx) w.dir = Math.sign(q.vx); } });
     if (w.t % 8 === 1) emit('wavewash', w.x);
-    return w.t < TIDE_TICKS;
+    if (w.t >= life && w.carry.length) dumpCarry(c, w, gy, LEN, H);
+    return w.t < life;
   });
+}
+
+// A breaking wave drops everything it carried: up to 350 pieces fall as themselves (stone, brick,
+// glass, sand ...), the rest settles straight onto the ground as rubble (sand / ash) in a mound.
+function dumpCarry(c, w, gy, LEN, H) {
+  const g = c.grid, list = w.carry;
+  w.carry = [];
+  let k = 0;
+  for (; k < Math.min(350, list.length); k++)
+    c.ps.spawn(w.x - w.dir * Math.random() * LEN, gy - Math.random() * H * 0.6, w.dir * Math.random() * 2, 0.3, list[k], { bounces: 0, dmg: 0 });
+  for (; k < list.length; k++) { // the rest: piled up directly
+    const t = list[k], rub = KIND[t] === Kind.POWDER ? t : t === EL.WOOD || t === EL.PLANT ? EL.ASH : EL.SAND;
+    const X = Math.floor(w.x - w.dir * Math.random() * LEN);
+    if (X < 0 || X >= g.w) continue;
+    const top = groundBelow(g, X, gy - H);
+    if (top > 0 && g.inBounds(X, top - 1)) g.set(X, top - 1, rub);
+  }
 }
 
 
