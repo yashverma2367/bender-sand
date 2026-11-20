@@ -23,7 +23,7 @@ export function createScreens(stage, maps, handlers) {
     format: 'ffa', win: 'kos', map: 'random',
     slots: [
       { on: true, name: 'Player 1', type: 'fire', source: isTouchDevice ? 'touch' : 'kb1', team: 0 },
-      { on: true, name: 'Player 2', type: 'water', source: isTouchDevice ? 'cpu-normal' : 'kb2', team: 0 },
+      { on: true, name: 'Player 2', type: 'water', source: isTouchDevice ? 'pad0' : 'kb2', team: 0 },
       { on: false, name: 'Player 3', type: 'earth', source: 'pad0', team: 1 },
       { on: false, name: 'Player 4', type: 'air', source: 'pad1', team: 1 },
     ],
@@ -259,7 +259,6 @@ export function createScreens(stage, maps, handlers) {
     });
     for (let k = lobby.players.length; k < 4; k++) {
       const r = el('div', 'slot off', `<span class="pname">open slot</span>`);
-      if (host) { const b = button('+ CPU', () => ctl.onBot(-1, {}), 'addcpu'); r.classList.remove('off'); r.querySelector('.pname').style.opacity = 0.4; r.append(b); }
       table.append(r);
     }
     box.append(table);
@@ -336,7 +335,7 @@ export function createScreens(stage, maps, handlers) {
   }
 
   // ---------- training ----------
-  const training = { type: 'fire', dummy: 'earth', mode: 'dummy', map: 'city', infinite: true };
+  const training = { type: 'fire', dummy: 'earth', mode: 'dummy', map: 'skyline', infinite: true };
   function showTraining() {
     const box = el('div', 'panel wide');
     box.append(el('h2', 'title small', 'TRAINING'));
@@ -353,7 +352,7 @@ export function createScreens(stage, maps, handlers) {
       return r;
     };
     box.append(pickRow('You', 'type'), pickRow('Dummy', 'dummy'),
-      opt('Dummy', [['dummy', 'Stands still'], ['walker', 'Walks around'], ['easy', 'Fights back (Easy CPU)']], 'mode'),
+      opt('Dummy', [['dummy', 'Stands still'], ['walker', 'Walks around']], 'mode'),
       ...(maps.length > 1 ? [opt('Map', maps.map((m) => [m.id, m.name]), 'map')] : []),
       opt('Cooldowns', [[true, 'No cooldowns + ultimate'], [false, 'Normal']], 'infinite'));
     box.append(el('div', 'hint', 'combo counter on top · the dummy heals after 2 s without a hit · Esc to leave'));

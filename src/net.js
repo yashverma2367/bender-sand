@@ -82,8 +82,8 @@ export function dustCodes(grid, out) {
 }
 export function windCodes(grid, out) {
   for (let f = 0; f < out.length; f++) {
-    const m = Math.abs(grid.vx[f]) + Math.abs(grid.vy[f]);
-    out[f] = m <= 0.2 ? 0 : Math.min(15, Math.ceil(m * 2));
+    const vx = grid.vx[f], vy = grid.vy[f], m = Math.abs(vx) + Math.abs(vy);
+    out[f] = m <= 0.2 ? 0 : Math.min(15, Math.ceil(m * 2)) | ((Math.round(Math.atan2(vy, vx) / (Math.PI / 8)) & 15) << 4); // speed | heading (16 directions)
   }
   return out;
 }
@@ -126,6 +126,10 @@ export class SnapEncoder {
     this.dust = new Uint8Array(grid.fw * grid.fh);
   }
   reset() { this.cells.fill(0); this.wind.fill(0); this.dust.fill(0); }
+  fit(grid) { // maps come in different sizes
+    if (this.cells.length !== grid.w * grid.h) this.cells = new Uint16Array(grid.w * grid.h);
+    if (this.wind.length !== grid.fw * grid.fh) { this.wind = new Uint8Array(grid.fw * grid.fh); this.dust = new Uint8Array(grid.fw * grid.fh); }
+  }
   // cur: shared per-tick codes { cells, wind }, particles, json: anything serializable.
   encode(cur, ps, json) {
     const w = new Writer();
@@ -152,7 +156,7 @@ export function applySnapshot(bytes, grid, ps) {
   const json = JSON.parse(dec.decode(bytes.subarray(r.p, r.p + jl)));
   r.p += jl;
   readDiff(r, (i, c) => applyCell(grid, i, c), true);
-  readDiff(r, (f, q) => { grid.vx[f] = q * 0.5; grid.vy[f] = 0; }, false);
+  readDiff(r, (f, q) => { const m = (q & 15) * 0.5, a = (q >> 4) * (Math.PI / 8); grid.vx[f] = Math.cos(a) * m; grid.vy[f] = Math.sin(a) * m; }, false);
   readDiff(r, (f, q) => { if (grid.dust) grid.dust[f] = q / 150; }, false);
   const n = Math.min(r.u16(), ps.max);
   for (let i = 0; i < n; i++) {

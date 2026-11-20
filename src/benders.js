@@ -2,7 +2,7 @@
 import { Kind, KIND, EL } from './elements.js';
 import { BODY_W, BODY_H, createAnim, updateAnim } from './sprite.js';
 import { initAbilities, explode } from './abilities.js';
-import { splash, addDust, shatterGlass } from './physics.js';
+import { splash, addDust, shatterGlass, noteDamage, o2At } from './physics.js';
 import { emit } from './sfx.js';
 import { hitstop, slowmo, popup } from './juice.js';
 
@@ -12,6 +12,8 @@ export const MAX_HP = 100;
 
 const GRAVITY = 0.08;         // cells/tick^2
 const SPLAT_V = 2.6;          // knocked faster than this into terrain = a wall-splat
+const PINBALL_V = 3.3;        // faster than this: you bounce off it and keep flying (pinball)
+const CRASH_V = 4.6;          // faster than this: you smash straight through walls and floors
 const MAX_FALL = 3.5;
 const RESPAWN_TICKS = 120;
 const SPAWN_PROTECTION = 90; // ticks of invulnerability after (re)spawning
@@ -79,8 +81,9 @@ export class Player {
   // (no fall damage on spawn).
   spawn() {
     const g = this.grid;
-    const sx = Math.max(2, Math.min(g.w - BW - 2, Math.floor(this.spawnX ?? g.w / 2) - Math.floor(BW / 2))); // map spawn point
-    let sy = 0;
+    const sp = this.spawnX, at = Array.isArray(sp); // a map spawn point: x (drop in from the top) or [x, y] (start from y: underground maps)
+    const sx = Math.max(2, Math.min(g.w - BW - 2, Math.floor((at ? sp[0] : sp) ?? g.w / 2) - Math.floor(BW / 2)));
+    let sy = at ? Math.max(0, Math.floor(sp[1])) : 0;
     while (sy < g.h - BH && this.collide(sx, sy)) sy++;
     while (sy < g.h - BH && !this.collide(sx, sy + 1)) sy++;
     Object.assign(this, {
@@ -145,6 +148,7 @@ export class Player {
 
     // Held by Earth's grip: can't walk or jump.
     if (this.waterFormT > 0) this.waterFormT--;
+    if (this.crashCd > 0) this.crashCd--;
     const rooted = this.rootT > 0;
     if (rooted) { this.rootT--; input = { ...input, jump: false, left: false, right: false }; }
     // Horizontal control (briefly weakened right after a wall jump, so the kick-off carries).
@@ -159,9 +163,17 @@ export class Player {
     // On ice you slide: barely any grip to speed up, stop or turn.
     const under = this.grid.get(Math.floor(this.x + BW / 2), Math.floor(this.y) + BH);
     this.onIce = this.onGround && under === EL.ICE;
-    this.vx += (dir * speed * (this.onIce ? 1.25 : 1) - this.vx) * (this.onGround ? (this.onIce ? 0.03 : 0.3) : this.wallLock > 0 ? 0.03 : 0.12);
+    // Sent flying by a big hit: you tumble with the momentum (barely any air control) until you slow
+    // down or land, so knockback carries into walls (splats, pinball bounces, crashing through).
+    const tumbling = !this.onGround && this.lastHitAt !== undefined && Player.clock - this.lastHitAt < 45 && Math.abs(this.vx) > SPLAT_V;
+    this.vx += (dir * speed * (this.onIce ? 1.25 : 1) - this.vx) * (this.onGround ? (this.onIce ? 0.03 : 0.3) : tumbling ? 0.012 : this.wallLock > 0 ? 0.03 : 0.12);
     if (this.wallLock > 0) this.wallLock--;
     if (this.surfT > 0) { this.surfT--; this.vx = this.surfVX; } // earth surf carries you
+    if (!(this.waterFormT > 0)) { // water with force: floods drag you downhill, waterfalls hammer you down
+      const sw = d.swimmer ? 0.5 : 1;
+      if (Math.abs(env.flow) > 2) this.vx += Math.max(-0.35, Math.min(0.35, env.flow * 0.03)) * sw;
+      if (env.pour > 2) this.vy += Math.min(0.3, env.pour * 0.025) * sw;
+    }
 
     // Vertical: swim in liquid, otherwise gravity + jumps.
     if (env.submerged) {
@@ -272,6 +284,7 @@ export class Player {
         }
       }
       if (!climbed && this.clearStrays(bx, by) && !this.collide(bx, by)) { this.x = nx; continue; }
+      if (!climbed && this.crashThrough(bx, by, Math.abs(this.vx), Math.sign(step), 0)) { this.x = nx; continue; }
       if (!climbed) { this.vx = 0; return; }
     }
   }
@@ -285,6 +298,7 @@ export class Player {
       const by = Math.floor(ny);
       if (by === Math.floor(this.y) || !this.collide(Math.floor(this.x), by)) { this.y = ny; continue; }
       if (step < 0 && this.clearStrays(Math.floor(this.x), by) && !this.collide(Math.floor(this.x), by)) { this.y = ny; continue; } // head-butt debris overhead
+      if (this.crashThrough(Math.floor(this.x), by, Math.abs(this.vy), 0, Math.sign(step))) { this.y = ny; continue; }
       this.vy = 0;
       return step > 0;
     }
@@ -353,7 +367,18 @@ export class Player {
       }
     }
     const liquidFrac = liquid / (BW * BH);
-    return { liquidFrac, submerged: liquidFrac > 0.35, lava, fire, steam, hot, headUnder: head >= BW * 2 - 1 };
+    // Moving water: the water level on each side of the body (a flood rushing toward the low side
+    // drags you with it) and water pouring down onto your head (a waterfall pins you down).
+    const isW = (x, y) => x >= 0 && x < g.w && y >= 0 && y < g.h && g.type[y * g.w + x] === EL.WATER;
+    const isAir = (x, y) => x >= 0 && x < g.w && y >= 0 && y < g.h && (g.type[y * g.w + x] === 0 || KIND[g.type[y * g.w + x]] === Kind.GAS);
+    let lvlL = 0, lvlR = 0, pour = 0; // only counts where the water has open air to rush into on the other side
+    for (let y = by - 10; y < by + BH; y++) for (let k = 1; k <= 3; k++) {
+      const L = bx - k, R = bx + BW - 1 + k;
+      if (isW(L, y) && isAir(R, y)) lvlL++;
+      if (isW(R, y) && isAir(L, y)) lvlR++;
+    }
+    for (let y = by - 4; y < by; y++) for (let x = bx; x < bx + BW; x++) if (isW(x, y) && !(y + 1 < g.h && KIND[g.type[(y + 1) * g.w + x]] === Kind.STATIC)) pour++;
+    return { liquidFrac, submerged: liquidFrac > 0.35, lava, fire, steam, hot, headUnder: head >= BW * 2 - 1 || o2At(bx + BW / 2, by + 2) < 0.2, flow: (lvlL - lvlR) / 3, pour }; // (a smoke-filled, burnt-out room is like being underwater)
   }
 
   applyEnv(env) {
@@ -397,8 +422,9 @@ export class Player {
       if (n >= 6) { // a real hit: freeze-frame + a readable knockback arc away from the attacker
         hitstop(Math.min(6, 2 + n / 6));
         const a = Player.registry.get(by), side = a ? Math.sign(this.x - a.x) || 1 : this.facing * -1;
-        this.vx += side * Math.min(2.2, n * 0.07);
-        this.vy -= Math.min(1.8, 0.4 + n * 0.05);
+        const km = this.knockMul();
+        this.vx += side * Math.min(2.2, n * 0.07) * km;
+        this.vy -= Math.min(1.8, 0.4 + n * 0.05) * km;
       }
     }
     if (n >= 0.3) emit('hit', this.x, n, 'hit' + this.id, 110);
@@ -415,14 +441,45 @@ export class Player {
   // Smashed into terrain at speed: a crater blast at the contact point (credited to the attacker),
   // a bounce back off it, dust, a freeze-frame.
   splat(x, y, speed, bx, by) {
-    this.splatCd = 30;
-    const r = Math.min(5, 2 + speed * 0.55);
+    const pinball = speed > PINBALL_V; // fast enough to bounce on: keep pinballing off walls
+    this.splatCd = pinball ? 6 : 30;
+    const r = Math.min(4.5, 1.6 + speed * 0.45);
     shatterGlass(x, y, r * 2, 3);
     explode(Player.world, x, y, r, 0, true, false, this.lastHitBy !== undefined ? this.lastHitBy : -1);
     addDust(x, y, 14, 0.5);
     hitstop(5);
-    this.vx = bx * speed * 0.35; if (by) this.vy = by * speed * 0.3;
+    const rest = pinball ? 0.72 : 0.35;
+    if (bx) this.vx = bx * speed * rest; if (by) this.vy = by * speed * rest;
     emit('splat', x, 2);
+  }
+
+  // Knocked hard enough, you don't stop at a wall: you smash through it (and the next one) leaving
+  // a body-sized hole, slowing a little each time. Steel only gives way to the very hardest hits.
+  // Returns true if the way ahead is now clear.
+  crashThrough(bx, by, speed, dx, dy) {
+    if (speed < CRASH_V || !Player.world || this.dashGrace > 0) return false;
+    if (this.lastHitAt === undefined || Player.clock - this.lastHitAt > 45) return false;
+    const g = this.grid, ps = Player.particles, cells = [];
+    for (let y = by; y < by + BH; y++) for (let x = bx; x < bx + BW; x++) {
+      if (!g.inBounds(x, y)) return false;
+      const t = g.type[y * g.w + x];
+      if (t === 0 || (KIND[t] !== Kind.STATIC && KIND[t] !== Kind.POWDER)) continue;
+      if (t === EL.STEEL && speed < CRASH_V * 1.4) return false;
+      cells.push([x, y]);
+    }
+    if (!cells.length) return false;
+    for (const [x, y] of cells) if (!ps || ps.lift(x, y, dx * speed * (0.5 + Math.random() * 0.5) + (Math.random() - 0.5), dy * speed * 0.5 - Math.random() * 1.5, { bounces: 1, dmg: 0 }) < 0) g.type[y * g.w + x] = 0;
+    shatterGlass(bx + BW / 2, by + BH / 2, 6, 3);
+    noteDamage(bx + BW / 2, by + BH / 2, 10);
+    addDust(bx + BW / 2, by + BH / 2, 10, 0.4);
+    if (!(this.crashCd > 0)) { // each wall costs some health and speed
+      this.crashCd = 6;
+      const a = this.lastHitBy;
+      this.damage(5, a !== undefined && a !== this.id ? a : -1);
+      hitstop(2); emit('ram', bx);
+    }
+    this.vx *= 0.9; this.vy *= 0.9;
+    return true;
   }
 
   // Knocked out: the body tumbles away spinning, bounces off what it hits and crashes through glass.
@@ -452,6 +509,9 @@ export class Player {
     if (r.rest) { r.vx *= 0.85; const lie = Math.round(r.a / (Math.PI / 2)) * (Math.PI / 2); r.a += (lie - r.a) * 0.2; r.spin = 0; } // settles lying down
     else r.a += r.spin;
   }
+
+  // The more damage you've taken, the further every hit sends you: x1 at full health, x2.2 near death.
+  knockMul() { return 1 + Math.max(0, 1 - this.hp / MAX_HP) * 1.2; }
 
   // A puff of whatever you're standing on (sand, snow, stone ...), visual only.
   dust(x, y, n) {

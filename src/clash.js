@@ -11,7 +11,7 @@
 //   register an entry every tick with callbacks (kill / set) that act on their own objects.
 import { EL, KIND, Kind } from './elements.js';
 import { BODY_W as BW, BODY_H as BH } from './sprite.js';
-import { explode, bodyAt, iceBloom } from './abilities.js';
+import { explode, bodyAt, iceBloom, crackCell } from './abilities.js';
 import { emit } from './sfx.js';
 import { clashBurst } from './physics.js';
 
@@ -73,6 +73,37 @@ function nativeEntry(p) {
     kill: () => { p.alive = false; },
     set: (q) => Object.assign(p, q),
   });
+}
+
+// Ricochets: a hard shot (stone, ice spear, boulder) that hits a hard surface at a shallow angle
+// glances off instead of breaking: it keeps most of its speed, chips the surface, throws sparks.
+// Steel deflects even steeper hits. Up to two bounces per shot, so bank shots off the street
+// and walls work.
+const HARD = new Set([EL.STONE, EL.CONCRETE, EL.STEEL, EL.ASPHALT, EL.OBSIDIAN, EL.BRICK, EL.ICE]);
+function ricochet(world, p, X, Y, t, n) {
+  if (!(p.el === 'earth' || p.el === 'ice' || p.el === 'sand' || p.boulder) || (p.bounced || 0) >= 2 || !HARD.has(t) || p.shape === 'ram') return false;
+  const g = world.grid;
+  let nx = 0, ny = 0; // surface normal: away from the solid cells around the hit
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+    const x = X + dx, y = Y + dy;
+    const solid = !g.inBounds(x, y) || KIND[g.type[y * g.w + x]] === Kind.STATIC;
+    if (solid) { nx -= dx; ny -= dy; }
+  }
+  const nl = Math.hypot(nx, ny), sp = Math.hypot(p.vx, p.vy);
+  if (nl < 1 || sp < 2) return false;
+  nx /= nl; ny /= nl;
+  const dot = p.vx * nx + p.vy * ny; // < 0: moving into the surface
+  if (dot >= 0) return false;
+  const steep = -dot / sp;            // 0 = grazing, 1 = head-on
+  if (steep > (t === EL.STEEL ? 0.6 : 0.42)) return false;
+  p.x -= p.vx / n; p.y -= p.vy / n;   // back out of the surface
+  p.vx = (p.vx - 2 * dot * nx) * 0.82; p.vy = (p.vy - 2 * dot * ny) * 0.82;
+  p.pow *= 0.85; p.bounced = (p.bounced || 0) + 1; p.age = Math.min(p.age, p.life - 30);
+  crackCell(g, world.particles, Y * g.w + X, 40);  // it chips the surface
+  const spark = t === EL.STEEL || t === EL.STONE || t === EL.CONCRETE;
+  for (let k = 0; k < 8; k++) world.particles.spawn(p.x, p.y, p.vx * 0.3 + nx * (1 + Math.random() * 2) + (Math.random() - 0.5) * 2, p.vy * 0.3 + ny * (1 + Math.random() * 2) + (Math.random() - 0.5) * 2, spark && k < 4 ? EL.FIRE : EL.SAND, { ghost: true, gravity: 0.1, life: 8 + (Math.random() * 6) | 0 });
+  emit('hit', p.x, 0.5);
+  return true;
 }
 
 function impact(world, p, x, y) {
@@ -219,6 +250,32 @@ function stepBlazes(world) {
   }
 }
 
+// Merging shots: two shots of the same element from the same bender that touch fuse into one
+// bigger, heavier shot (power adds up, it grows, its effects add up), flying on with their
+// combined momentum.
+function mergeShots(world) {
+  for (let i = 0; i < projectiles.length; i++) {
+    const a = projectiles[i];
+    if (!a.alive || a.shape === 'ram') continue;
+    for (let j = i + 1; j < projectiles.length; j++) {
+      const b = projectiles[j];
+      if (!b.alive || b.shape === 'ram' || b.owner !== a.owner || b.el !== a.el) continue;
+      if (Math.hypot(a.x - b.x, a.y - b.y) > a.r + b.r + 2) continue;
+      const wa = a.pow, wb = b.pow, wt = wa + wb || 1;
+      a.vx = (a.vx * wa + b.vx * wb) / wt; a.vy = (a.vy * wa + b.vy * wb) / wt;
+      a.x = (a.x * wa + b.x * wb) / wt; a.y = (a.y * wa + b.y * wb) / wt;
+      a.pow = a.pow + b.pow * 0.85; a.pow0 = a.pow;
+      a.r = Math.min(9, Math.hypot(a.r, b.r) * 1.1); a.boomR = Math.min(11, Math.hypot(a.boomR, b.boomR) * 1.05);
+      if (a.cells && b.cells) a.cells = a.cells.concat(b.cells).slice(0, 60);
+      if (a.pile || b.pile) a.pile = (a.pile || 0) + (b.pile || 0);
+      a.name = 'Merged ' + (a.name || a.el).replace(/^Merged /, '').toLowerCase(); a.merged = (a.merged || 1) + (b.merged || 1);
+      b.alive = false;
+      for (let k = 0; k < 14; k++) { const ang = (k / 14) * Math.PI * 2; world.particles.spawn(a.x, a.y, Math.cos(ang) * 1.6, Math.sin(ang) * 1.6, (STYLE[a.el] || STYLE.fire).cell, { ghost: true, gravity: 0, life: 7 }); }
+      emit('orbs', a.x);
+    }
+  }
+}
+
 // Move every native projectile (sub-stepped), hit bodies (proximity fuse) and terrain.
 export function stepProjectiles(world) {
   stepWalls(world);
@@ -238,11 +295,15 @@ export function stepProjectiles(world) {
       if (v) { impact(world, p, p.x + (v.x + BW / 2 - p.x) * 0.5, p.y + (v.y + BH / 2 - p.y) * 0.5); break; }
       if (Y >= 0 && X >= 0 && X < g.w) {
         const t = g.type[Y * g.w + X];
-        if (t !== 0 && KIND[t] !== Kind.GAS && !(p.el === 'water' && t === EL.WATER) && !(p.bloom && t === EL.ICE)) { impact(world, p, p.x - p.vx / n, p.y - p.vy / n); break; } // (ice spears glide through ice)
+        if (t !== 0 && KIND[t] !== Kind.GAS && !(p.el === 'water' && t === EL.WATER) && !(p.bloom && t === EL.ICE)) { // (ice spears glide through ice)
+          if (ricochet(world, p, X, Y, t, n)) break;
+          impact(world, p, p.x - p.vx / n, p.y - p.vy / n); break;
+        }
       }
     }
     if (p.alive) { drawProjectile(world.particles, p); nativeEntry(p); }
   }
+  mergeShots(world);
   for (let i = projectiles.length - 1; i >= 0; i--) if (!projectiles[i].alive) projectiles.splice(i, 1);
 }
 

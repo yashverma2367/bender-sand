@@ -5,7 +5,7 @@ export const Kind = { EMPTY: 0, STATIC: 1, POWDER: 2, LIQUID: 3, GAS: 4 };
 export const EL = {
   EMPTY: 0, SAND: 1, EARTH: 2, STONE: 3, WATER: 4, STEAM: 5, FIRE: 6, SMOKE: 7,
   LAVA: 8, ICE: 9, WOOD: 10, PLANT: 11, MUD: 12, ASH: 13, GLASS: 14, OBSIDIAN: 15,
-  CONCRETE: 16, STEEL: 17, BRICK: 18, ASPHALT: 19,
+  CONCRETE: 16, STEEL: 17, BRICK: 18, ASPHALT: 19, GASPIPE: 20, WATERPIPE: 21, CABLE: 22,
 };
 
 export const WIND_TOOL = 254; // brush that paints air force instead of cells
@@ -52,6 +52,14 @@ export const ELEMENTS = [
     colors: ['#4d5a6c', '#56647a', '#45515f', '#7d8ca3'] },
   { id: EL.BRICK, name: 'Brick', key: 'b', group: 'Earth', kind: Kind.STATIC, density: 10, cond: 0.06,
     colors: ['#9a4a35', '#a5543c', '#8e4330', '#c4b49c'] },
+  // City infrastructure: break one and it bursts (physics.js): gas -> a roaring flame jet,
+  // water main -> a geyser, power cable -> a live sparking end.
+  { id: EL.GASPIPE, name: 'Gas line', key: '-', group: 'Fire', kind: Kind.STATIC, density: 10, cond: 0.2,
+    colors: ['#c9a227', '#b8921f', '#d6ae30', '#7a6418'] },
+  { id: EL.WATERPIPE, name: 'Water main', key: '=', group: 'Water', kind: Kind.STATIC, density: 10, cond: 0.2,
+    colors: ['#3c6e9e', '#35638f', '#4479ab', '#24476a'] },
+  { id: EL.CABLE, name: 'Power cable', key: '/', group: 'Earth', kind: Kind.STATIC, density: 10, cond: 0.25,
+    colors: ['#18181c', '#222228', '#141418', '#2c2c34'] },
   { id: EL.ASPHALT, name: 'Asphalt', key: 'd', group: 'Earth', kind: Kind.STATIC, density: 10, cond: 0.06,
     colors: ['#2f3034', '#34353a', '#2b2c30', '#d8c25a'] },
 
@@ -178,3 +186,11 @@ for (const r of REACTIONS) {
   R_SELF[ba] = r.result[1]; R_OTHER[ba] = r.result[0];
   HAS_RULES[r.a] = HAS_RULES[r.b] = 1;
 }
+
+// How much structural damage (grid.crack, 0..255) a solid cell takes before it breaks. Blasts crack
+// everything around their hole; cracks add up hit after hit until the wall gives way.
+export const STRENGTH = new Uint8Array(256).fill(120);
+Object.entries({
+  [EL.GLASS]: 25, [EL.ICE]: 45, [EL.PLANT]: 40, [EL.WOOD]: 60, [EL.CABLE]: 50, [EL.GASPIPE]: 70, [EL.WATERPIPE]: 70,
+  [EL.BRICK]: 85, [EL.ASPHALT]: 105, [EL.CONCRETE]: 115, [EL.STONE]: 130, [EL.STEEL]: 190, [EL.OBSIDIAN]: 235,
+}).forEach(([t, v]) => { STRENGTH[t] = v; });

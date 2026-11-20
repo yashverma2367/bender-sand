@@ -6,12 +6,12 @@
 //
 // Every move works through real cells and flying particles, so it reacts with the world.
 // Most attacks are deliberately very fast (7-12 cells/tick) with explosive impacts.
-import { EL, Kind, KIND, IGNITE_T, AMBIENT } from './elements.js';
+import { EL, Kind, KIND, IGNITE_T, AMBIENT, STRENGTH } from './elements.js';
 import { MAX_HP } from './benders.js';
 import { BODY_W as BW, BODY_H as BH } from './sprite.js';
 import { emit } from './sfx.js';
 import { slowmo } from './juice.js';
-import { noteDamage, addDust, shockwave, splash, waterNear, shatterGlass } from './physics.js';
+import { noteDamage, addDust, shockwave, splash, waterNear, shatterGlass, implode, pushProps } from './physics.js';
 import { spawnProjectile, spawnWall, register } from './clash.js';
 
 export const SLOTS = ['basic', 'heavy', 'special', 'defense', 'mobility', 'ultimate'];
@@ -148,13 +148,14 @@ export function explode(world, x, y, r0, type, breakStatic = false, knockPlayer 
       // can break obsidian too.
       const smash = kind === Kind.STATIC && (t === EL.STEEL ? r0 >= 3.5 && d < r * (0.3 + Math.min(0.35, r0 * 0.05)) // steel: any real blast bends the middle out of it
         : breakStatic ? d < r * 0.9 : t !== EL.OBSIDIAN && d < r * 0.7);
-      if (smash && CRUMBLE[t]) g.type[i] = CRUMBLE[t]; // broken rock crumbles into rubble (sand)
+      if (smash && CRUMBLE[t]) { g.type[i] = CRUMBLE[t]; g.crack[i] = 0; } // broken rock crumbles into rubble (sand)
       if ((loose && Math.random() < 0.85) || smash) {
         const nx = d ? dx / d : 0, ny = d ? dy / d : -1, sp = force * k * (0.6 + Math.random() * 0.7);
         ps.lift(X, Y, nx * sp, ny * sp - 0.6, { bounces: 1, dmg: 0.25 });
       }
     }
   }
+  crackRing(g, ps, x, y, r, r0);
   // Knock the player away from the blast (fireball at your own feet = rocket jump).
   // Blast damage to everyone but the attacker, scaled by blast size.
   damageArea(world, x, y, r, 6 + r0 * 2.2, owner);
@@ -171,15 +172,14 @@ export function explode(world, x, y, r0, type, breakStatic = false, knockPlayer 
     if (!pl || pl.dead || (!knockPlayer && pl.id === owner)) continue;
     const dx = pl.x + BW / 2 - x, dy = pl.y + BH / 2 - y, d = Math.hypot(dx, dy);
     if (d < r + 6) {
-      const k = (1 - d / (r + 6)) * force * 0.45;
+      const k = (1 - d / (r + 6)) * force * 0.45 * (pl.knockMul ? pl.knockMul() : 1); // beaten-up = flies further
       pl.vx += (d ? dx / d : 0) * k;
       pl.vy += (d ? dy / d : -1) * k - k * 0.3;
     }
   }
-  for (let a = 0; a < 8; a++) {
-    const ax = Math.cos((a * Math.PI) / 4), ay = Math.sin((a * Math.PI) / 4);
-    g.addWind(x + ax * r, y + ay * r, r, ax * force * 0.8, ay * force * 0.8);
-  }
+  pushProps(x, y, r * 1.6, force * 0.7); // cars, dumpsters, barrels get thrown
+  g.addPressure(x, y, r * 1.2, Math.min(8, 2 + r0 * 1.3)); // the blast wave: travels, bounces off walls, funnels down tunnels
+  if (r0 >= 3) implode(x, y, r * 1.4, Math.min(6, 1 + r0 * 0.7), 9); // ...and the low pressure behind it sucks everything back in
   noteDamage(x, y, r); // anything left hanging falls
   if (r0 >= 2.5) addDust(x, y, r * 1.5, Math.min(1.2, 0.25 + r0 * 0.09));
   if (r0 >= 3 && waterNear(x, y, r) > 4) splash(x, y, r0 * 2);
@@ -193,7 +193,36 @@ export function explode(world, x, y, r0, type, breakStatic = false, knockPlayer 
 
 // What solid blocks turn into when a blast breaks them (so holes stay open instead of the
 // pieces settling back as solid rock).
-const CRUMBLE = { [EL.STONE]: EL.SAND, [EL.OBSIDIAN]: EL.SAND, [EL.GLASS]: EL.SAND, [EL.CONCRETE]: EL.SAND, [EL.BRICK]: EL.SAND, [EL.ASPHALT]: EL.SAND };
+const CRUMBLE = { [EL.STONE]: EL.SAND, [EL.OBSIDIAN]: EL.SAND, [EL.GLASS]: EL.SAND, [EL.CONCRETE]: EL.SAND, [EL.BRICK]: EL.SAND, [EL.ASPHALT]: EL.SAND, [EL.GASPIPE]: EL.SAND, [EL.WATERPIPE]: EL.SAND, [EL.CABLE]: EL.ASH };
+// Cracks: every blast damages the solid cells around its hole (strongest near it, out to 1.8x the
+// blast radius). Damage adds up across hits; a cell that passes its material's STRENGTH breaks.
+// So a wall takes a few shots before it gives, steel takes many, glass goes almost at once.
+export function crackCell(g, ps, i, amount) {
+  const t = g.type[i];
+  if (KIND[t] !== Kind.STATIC) return false;
+  const c = g.crack[i] + amount, T = g.temp[i];
+  const strength = T > 300 ? STRENGTH[t] * Math.max(0.3, 1 - (T - 300) / 1100) : STRENGTH[t]; // heat softens it
+  if (c < strength) { g.crack[i] = Math.min(255, c); return false; }
+  g.crack[i] = 0;
+  g.type[i] = CRUMBLE[t] || (t === EL.WOOD || t === EL.PLANT ? EL.ASH : t === EL.ICE ? EL.WATER : EL.SAND);
+  if (ps && Math.random() < 0.5 && ps.n < ps.max - 300) ps.lift(i % g.w, (i / g.w) | 0, (Math.random() - 0.5) * 2, -0.5 - Math.random(), { bounces: 1, dmg: 0 });
+  return true;
+}
+function crackRing(g, ps, x, y, r, r0) {
+  const R = r * 1.8, Rc = Math.ceil(R), cx = Math.floor(x), cy = Math.floor(y), base = 8 + r0 * 7;
+  let broke = 0;
+  for (let dy = -Rc; dy <= Rc; dy++) for (let dx = -Rc; dx <= Rc; dx++) {
+    const d = Math.hypot(dx, dy);
+    if (d > R) continue;
+    const X = cx + dx, Y = cy + dy;
+    if (!g.inBounds(X, Y)) continue;
+    const i = Y * g.w + X;
+    if (KIND[g.type[i]] !== Kind.STATIC) continue;
+    const k = 1 - d / (R + 1);
+    if (crackCell(g, ps, i, Math.round(base * k * k * (0.7 + Math.random() * 0.6)))) broke++;
+  }
+  if (broke) noteDamage(x, y, R);
+}
 // What the sonic clap pulverizes solids into.
 const PULVERIZE = { [EL.STONE]: EL.SAND, [EL.GLASS]: EL.SAND, [EL.OBSIDIAN]: EL.SAND, [EL.WOOD]: EL.ASH, [EL.PLANT]: EL.ASH, [EL.EARTH]: EL.EARTH, [EL.CONCRETE]: EL.SAND, [EL.BRICK]: EL.SAND, [EL.ASPHALT]: EL.SAND };
 // What the blaze torrent can melt into lava when it's held on one spot (sand turns to glass on its own).
@@ -764,6 +793,7 @@ function airOngoing(c) {
       x: tn.x, y: tn.y - tn.h * 0.4, r: 9, vx: tn.vx, vy: tn.vy, owner: p.id, team: p.team,
       kill: () => { tn.dead = true; },
       set: (q) => { if (q.el === 'fire' && !tn.fire) { tn.fire = true; for (let k = 0; k < 30; k++) { const X = Math.floor(tn.x + (Math.random() - 0.5) * 10), Y = Math.floor(tn.y - Math.random() * 8); if (g.inBounds(X, Y) && g.type[Y * g.w + X] === 0) g.set(X, Y, EL.FIRE); } } } });
+    if (tn.t % 6 === 0) g.addPressure(tn.x, tn.y - tn.h * 0.3, 14, -0.8); // low-pressure core: the air (and what's in it) drifts in
     const H = tn.h, top = tn.y - H, spin = tn.t * 0.32, lean = tn.vx * 4; // top leans with travel
     const fade = Math.max(0.05, Math.min(1, tn.t / 12, (tn.life - tn.t) / 20));
     const radius = (h) => (1.5 + Math.pow(Math.max(0, Math.min(1, h)), 1.3) * 13) * fade; // h = 0 (base) .. 1 (top)

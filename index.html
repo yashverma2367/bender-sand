@@ -88,6 +88,9 @@
     .ctag { border: 1px solid; border-radius: 4px; padding: 0 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
     .chow { color: #e8b04a; font-size: 12px; margin-top: 2px; }
     .cres { color: #9aa0ae; font-size: 12px; }
+    .debugbadge { position: absolute; left: 8px; top: 8px; z-index: 5; pointer-events: none; font: 11px/1.4 ui-monospace, monospace; color: #e7e3d8; background: rgba(10,11,16,.82); border: 1px solid #333a4d; border-radius: 4px; padding: 4px 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .debugbadge b { color: #e8b04a; }
+    .debugbadge .dbg-heat { display: inline-block; width: 70px; height: 8px; border-radius: 2px; background: linear-gradient(90deg, #3b6cff, #1c2a55, #14151c, #5a1a1a, #c2300e, #ff8a1a, #fff3b0); }
     .addcpu { margin-left: auto; padding: 3px 10px; font-size: 11px; }
     .btn.static { cursor: default; } .btn.static:not(.active) { opacity: 0.5; }
     .actions { display: flex; gap: 8px; justify-content: flex-end; }
@@ -145,6 +148,7 @@
     body.play #game { border: 0; }
     /* the HUD lives in a strip above the map, not on top of it */
     body.play #stage { padding-top: 64px; }
+    body.play .debugbadge { top: 72px; }
     body.play .cards { top: 4px; }
     body.play .clock { top: 6px; font-size: 13px; }
     body.play .feed { top: 26px; left: 50%; right: auto; transform: translateX(-50%); text-align: center; font-size: 10px; line-height: 1.25; }

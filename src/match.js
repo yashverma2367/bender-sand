@@ -116,7 +116,7 @@ export class Match {
       let d = Infinity;
       for (const p of this.players) {
         if (p === v || p.dead || (v.team !== null && p.team === v.team)) continue;
-        d = Math.min(d, Math.abs(p.x - sx));
+        d = Math.min(d, Array.isArray(sx) ? Math.hypot(p.x - sx[0], (p.y - sx[1]) * 0.7) : Math.abs(p.x - sx));
       }
       if (d > bestD) { bestD = d; best = sx; }
     }

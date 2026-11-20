@@ -6,9 +6,19 @@ import {
   WALL, AMBIENT, BURN_T, SHADES,
 } from './elements.js';
 
+// Solids that never do anything on their own (no reactions, no burning, no lifetime): skipped in
+// the update loop unless they're hot / cold enough to change phase.
+const QUIET = new Uint8Array(256);
+for (let t = 1; t < 255; t++) QUIET[t] = KIND[t] === Kind.STATIC && !HAS_RULES[t] && !LIFE_MAX[t] && IGNITE_T[t] === Infinity && !HOLD_T[t] ? 1 : 0;
+
 export const FIELD = 4;     // air field cell = 4x4 grid cells
 const WIND_MAX = 6;
-const WIND_DECAY = 0.97;
+const WIND_DECAY = 0.985;   // still air returns slowly
+const ADVECT = 0.22;       // how far the flow carries itself per tick (field cells per unit wind)
+const PUSH = 0.7;          // how hard pressure differences push the air
+const COMPRESS = 0.55;     // how fast converging air builds pressure
+const PRESSURE_DECAY = 0.988;
+const PRESSURE_MAX = 8;
 const RADIANT_HEAT = 120;
 
 const DX4 = [0, 0, -1, 1];
@@ -23,6 +33,11 @@ function randRange(min, max) {
 
 export class Grid {
   constructor(w, h) {
+    this.resize(w, h);
+  }
+
+  // (Re)allocate everything for a w x h world (maps come in different sizes). Wipes the world.
+  resize(w, h) {
     this.w = w;
     this.h = h;
     const n = w * h;
@@ -31,6 +46,7 @@ export class Grid {
     this.temp = new Float32Array(n).fill(AMBIENT);
     this.life = new Uint16Array(n);  // countdown: lifetime for fire/smoke, burn time for wood/plant
     this.stamp = new Uint32Array(n); // tick a cell last changed, prevents double updates
+    this.crack = new Uint8Array(n);  // structural damage on solid cells (0 = sound); breaks at the material's strength
     this.tick = 0;
 
     this.fw = Math.ceil(w / FIELD);
@@ -40,6 +56,10 @@ export class Grid {
     this.vy = new Float32Array(fn);
     this.tmpX = new Float32Array(fn);
     this.tmpY = new Float32Array(fn);
+    this.rho = new Float32Array(fn);     // air overpressure (0 = calm, + = compressed, - = vacuum)
+    this.tmpR = new Float32Array(fn);
+    this.solidF = new Uint8Array(fn);    // 1 = this air cell is mostly solid (walls block the air)
+    this.heatF = new Float32Array(fn);   // how much heat rises off this block (fire, lava, hot metal)
   }
 
   inBounds(x, y) {
@@ -56,6 +76,7 @@ export class Grid {
     const i = y * this.w + x;
     this.type[i] = t;
     this.shade[i] = (Math.random() * SHADES) | 0;
+    this.crack[i] = 0;
     this.temp[i] = SPAWN_T[t];
     this.life[i] = LIFE_MAX[t] ? randRange(LIFE_MIN[t], LIFE_MAX[t]) : 0;
   }
@@ -65,6 +86,7 @@ export class Grid {
   transform(i, t) {
     const T = this.temp;
     this.type[i] = t;
+    this.crack[i] = 0;
     this.shade[i] = (Math.random() * SHADES) | 0;
     this.life[i] = LIFE_MAX[t] ? randRange(LIFE_MIN[t], LIFE_MAX[t]) : 0;
     if (t === 0) T[i] = AMBIENT;
@@ -75,6 +97,7 @@ export class Grid {
 
   clear() {
     this.type.fill(0);
+    this.crack.fill(0);
     this.temp.fill(AMBIENT);
     this.life.fill(0);
     this.vx.fill(0);
@@ -128,6 +151,7 @@ export class Grid {
         if (X < 0 || X >= w || Y >= h) return null; // touching the map edge / floor: anchored
         if (Y < 0) continue;
         const j = Y * w + X, k2 = KIND[type[j]];
+        if (type[j] === EL.LAVA) return null; // crust floating on lava: part of the pool
         if (k2 !== Kind.STATIC && k2 !== Kind.POWDER) continue;
         if (k2 === Kind.POWDER) return null; // resting on a pile: leave it
         if (!seen.includes(j)) { seen.push(j); if (seen.length > max) return null; }
@@ -165,7 +189,7 @@ export class Grid {
     this.tick++;
     this.heat();
     this.stepWind();
-    const { w, h, type, stamp, tick } = this;
+    const { w, h, type, stamp, tick, temp } = this;
     // Bottom-up so falling cells don't get processed twice; random row direction avoids left/right bias.
     for (let y = h - 1; y >= 0; y--) {
       const ltr = Math.random() < 0.5;
@@ -174,6 +198,7 @@ export class Grid {
         const i = y * w + x;
         const t = type[i];
         if (t === 0 || stamp[i] === tick) continue;
+        if (QUIET[t] && temp[i] <= HOT_T[t] && temp[i] >= COLD_T[t]) continue; // plain solid walls: nothing to do
         this.updateCell(x, y, i, t);
       }
     }
@@ -221,20 +246,21 @@ export class Grid {
       const row = y * w;
       for (let x = 0; x < w; x++) {
         const i = row + x;
-        const a = type[i];
-        if (x + 1 < w) this.exchange(i, i + 1, a, type[i + 1], temp);
-        if (y + 1 < h) this.exchange(i, i + w, a, type[i + w], temp);
+        const a = type[i], ti = temp[i];
+        // (two cells both exactly at room temperature exchange nothing: skip them, most of the map)
+        if (x + 1 < w && (ti !== AMBIENT || temp[i + 1] !== AMBIENT)) this.exchange(i, i + 1, a, type[i + 1], temp);
+        if (y + 1 < h && (ti !== AMBIENT || temp[i + w] !== AMBIENT)) this.exchange(i, i + w, a, type[i + w], temp);
       }
     }
   }
 
   exchange(i, j, a, b, temp) {
     if (a === 0) {
-      if (b !== 0) temp[j] += (AMBIENT - temp[j]) * AIRLOSS[b];
+      if (b !== 0) { temp[j] += (AMBIENT - temp[j]) * AIRLOSS[b]; if (temp[j] > AMBIENT - 0.05 && temp[j] < AMBIENT + 0.05) temp[j] = AMBIENT; }
       return;
     }
     if (b === 0) {
-      temp[i] += (AMBIENT - temp[i]) * AIRLOSS[a];
+      temp[i] += (AMBIENT - temp[i]) * AIRLOSS[a]; if (temp[i] > AMBIENT - 0.05 && temp[i] < AMBIENT + 0.05) temp[i] = AMBIENT;
       return;
     }
     const k = COND[a] < COND[b] ? COND[a] : COND[b];
@@ -294,19 +320,103 @@ export class Grid {
   }
 
   // ---------- air field ----------
-  stepWind() {
-    const { fw, fh, vx, vy, tmpX, tmpY } = this;
-    for (let y = 0; y < fh; y++) {
-      for (let x = 0; x < fw; x++) {
-        const i = y * fw + x;
-        const l = x > 0 ? i - 1 : i, r = x < fw - 1 ? i + 1 : i;
-        const u = y > 0 ? i - fw : i, d = y < fh - 1 ? i + fw : i;
-        tmpX[i] = (vx[i] * 0.6 + (vx[l] + vx[r] + vx[u] + vx[d]) * 0.1) * WIND_DECAY;
-        tmpY[i] = (vy[i] * 0.6 + (vy[l] + vy[r] + vy[u] + vy[d]) * 0.1) * WIND_DECAY;
-      }
+  // ---------- air: a simple compressible flow on the coarse field ----------
+  // Velocity (vx, vy) and overpressure (rho) per FIELD x FIELD block. Each tick:
+  //   - the flow carries itself along (semi-Lagrangian advection)
+  //   - air accelerates from high to low pressure; pressure rises where air converges
+  //     (a sound / blast wave that travels, reflects off walls and funnels down corridors)
+  //   - solid blocks are walls: no flow into them, no pressure through them
+  //   - everything slowly calms back to still air
+  // The map's edges are open sky (pressure vents out), except the floor.
+  updateSolidField() {
+    // A block blocks the air if a solid line crosses it (any full row or full column of solid cells):
+    // so 2-3 cell walls, floors and slabs are airtight even though they don't fill the block.
+    const { w, h, fw, fh, type, solidF } = this;
+    const isS = (x, y) => { if (x >= w || y >= h) return true; const t = type[y * w + x]; const k = KIND[t]; return t !== EL.CABLE && (k === Kind.STATIC || k === Kind.POWDER || k === Kind.LIQUID); };
+    for (let fy = 0; fy < fh; fy++) for (let fx = 0; fx < fw; fx++) {
+      const x0 = fx * FIELD, y0 = fy * FIELD;
+      let block = false;
+      for (let r = 0; r < FIELD && !block; r++) { let row = true, col = true; for (let q = 0; q < FIELD; q++) { if (!isS(x0 + q, y0 + r)) row = false; if (!isS(x0 + r, y0 + q)) col = false; } block = row || col; }
+      solidF[fy * fw + fx] = block ? 1 : 0;
+      // heat rising from here: hot cells in this block (fire, lava, hot ground, hot steel)
+      let heat = 0;
+      for (let y = y0; y < Math.min(h, y0 + FIELD); y++) for (let x = x0; x < Math.min(w, x0 + FIELD); x++) { const T = this.temp[y * w + x]; if (T > 90) heat += Math.min(1, (T - 90) / 500); }
+      this.heatF[fy * fw + fx] = heat / (FIELD * FIELD);
     }
-    this.vx = tmpX; this.tmpX = vx;
-    this.vy = tmpY; this.tmpY = vy;
+    // the warmth carries up: a block above a hot one is lifted too (a rising column)
+    for (let fy = fh - 1; fy >= 1; fy--) for (let fx = 0; fx < fw; fx++) { // bottom to top, so a column carries all the way up
+      const i = fy * fw + fx, up = i - fw;
+      if (!solidF[up]) this.heatF[up] = Math.max(this.heatF[up], this.heatF[i] * 0.93);
+    }
+  }
+
+  stepWind() {
+    const { fw, fh, solidF } = this;
+    if (this.tick % 4 === 1) this.updateSolidField();
+    let { vx, vy, tmpX, tmpY, rho, tmpR } = this;
+    const solid = (x, y) => x < 0 || x >= fw ? false : y >= fh ? true : y < 0 ? false : solidF[y * fw + x] === 1;
+    // 1. advection: each cell takes the velocity found upstream of it
+    const sample = (arr, x, y) => {
+      x = Math.max(0, Math.min(fw - 1.001, x)); y = Math.max(0, Math.min(fh - 1.001, y));
+      const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0, i = y0 * fw + x0;
+      return (arr[i] * (1 - fx) + arr[i + 1] * fx) * (1 - fy) + (arr[i + fw] * (1 - fx) + arr[i + fw + 1] * fx) * fy;
+    };
+    for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
+      const i = y * fw + x;
+      if (solidF[i]) { tmpX[i] = 0; tmpY[i] = 0; continue; }
+      const sx = x - vx[i] * ADVECT, sy = y - vy[i] * ADVECT;
+      tmpX[i] = sample(vx, sx, sy); tmpY[i] = sample(vy, sx, sy);
+    }
+    [vx, tmpX] = [tmpX, vx]; [vy, tmpY] = [tmpY, vy];
+    // 2. pressure pushes the air; walls stop it; a little blur; calm down
+    for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
+      const i = y * fw + x;
+      if (solidF[i]) { tmpX[i] = 0; tmpY[i] = 0; continue; }
+      const pr = rho[i];
+      const pl = x > 0 ? (solidF[i - 1] ? pr : rho[i - 1]) : 0, prr = x < fw - 1 ? (solidF[i + 1] ? pr : rho[i + 1]) : 0;
+      const pu = y > 0 ? (solidF[i - fw] ? pr : rho[i - fw]) : 0, pd = y < fh - 1 ? (solidF[i + fw] ? pr : rho[i + fw]) : pr;
+      let ux = vx[i] - PUSH * (prr - pl) * 0.5, uy = vy[i] - PUSH * (pd - pu) * 0.5;
+      // neighbours' average (only open air) for a little blur
+      let ax = 0, ay = 0, n = 0;
+      if (x > 0 && !solidF[i - 1]) { ax += vx[i - 1]; ay += vy[i - 1]; n++; }
+      if (x < fw - 1 && !solidF[i + 1]) { ax += vx[i + 1]; ay += vy[i + 1]; n++; }
+      if (y > 0 && !solidF[i - fw]) { ax += vx[i - fw]; ay += vy[i - fw]; n++; }
+      if (y < fh - 1 && !solidF[i + fw]) { ax += vx[i + fw]; ay += vy[i + fw]; n++; }
+      if (n) { ux = ux * 0.88 + (ax / n) * 0.12; uy = uy * 0.88 + (ay / n) * 0.12; }
+      // walls: no flow into a solid neighbour
+      if (ux > 0 && solid(x + 1, y)) ux = 0; else if (ux < 0 && solid(x - 1, y)) ux = 0;
+      if (uy > 0 && solid(x, y + 1)) uy = 0; else if (uy < 0 && solid(x, y - 1)) uy = 0;
+      tmpX[i] = Math.max(-WIND_MAX, Math.min(WIND_MAX, ux * WIND_DECAY));
+      tmpY[i] = Math.max(-WIND_MAX, Math.min(WIND_MAX, uy * WIND_DECAY));
+    }
+    [vx, tmpX] = [tmpX, vx]; [vy, tmpY] = [tmpY, vy];
+    // 3. pressure: rises where air converges, falls where it spreads out; relaxes back to calm
+    for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
+      const i = y * fw + x;
+      if (solidF[i]) { tmpR[i] = 0; continue; }
+      const vl = x > 0 ? vx[i - 1] : vx[i], vr = x < fw - 1 ? vx[i + 1] : vx[i], vu = y > 0 ? vy[i - fw] : vy[i], vd = y < fh - 1 ? vy[i + fw] : vy[i];
+      const div = (vr - vl) * 0.5 + (vd - vu) * 0.5;
+      tmpR[i] = (rho[i] - COMPRESS * div) * PRESSURE_DECAY;
+    }
+    [rho, tmpR] = [tmpR, rho];
+    this.vx = vx; this.vy = vy; this.tmpX = tmpX; this.tmpY = tmpY; this.rho = rho; this.tmpR = tmpR;
+  }
+
+  // A burst of overpressure (a blast): it expands as a wave, shaped by the walls around it.
+  addPressure(x, y, r, amount) {
+    const { fw, fh, rho, solidF } = this;
+    const cx = x / FIELD, cy = y / FIELD, fr = Math.max(1, r / FIELD);
+    for (let fy = Math.floor(cy - fr); fy <= Math.ceil(cy + fr); fy++) for (let fx = Math.floor(cx - fr); fx <= Math.ceil(cx + fr); fx++) {
+      if (fx < 0 || fx >= fw || fy < 0 || fy >= fh || solidF[fy * fw + fx]) continue;
+      const d = Math.hypot(fx + 0.5 - cx, fy + 0.5 - cy) / fr;
+      if (d > 1) continue;
+      const i = fy * fw + fx;
+      rho[i] = Math.max(-PRESSURE_MAX, Math.min(PRESSURE_MAX, rho[i] + amount * (1 - d * 0.6)));
+    }
+  }
+  pressureAt(x, y) {
+    const fx = Math.max(0, Math.min(this.fw - 1, (x / FIELD) | 0)), fy = Math.max(0, Math.min(this.fh - 1, (y / FIELD) | 0));
+    return this.rho[fy * this.fw + fx];
   }
 
   // Add force (dx, dy) in a circle of radius r grid cells around (x, y).

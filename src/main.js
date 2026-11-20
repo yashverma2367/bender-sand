@@ -10,12 +10,12 @@ import { Player, BENDER_TYPES, MAX_HP } from './benders.js';
 import { Particles } from './particles.js';
 import { updateAbilities, explode, creditDamage, channelInfo, readyMask, slotInfo } from './abilities.js';
 import { createMoveBar } from './movebar.js';
-import { initPhysics, resetPhysics, stepPhysics, setBursts } from './physics.js';
+import { initPhysics, resetPhysics, stepPhysics, setBursts, scanPipes } from './physics.js';
 import * as sfx from './sfx.js';
 import { setTrack, musicState } from './music.js';
 import { juice, stepJuice, resetJuice, slowmo, cinematic, ULT_NAMES } from './juice.js';
 import { buildUI } from './ui.js';
-import { MAPS, loadMap } from './maps.js';
+import { MAPS, LAB_MAP, loadMap } from './maps.js';
 import { Match } from './match.js';
 import { createScreens } from './hud.js';
 import { attachKeyboard, createInput, sampleInput, isDown, GAME_KEYS } from './input.js';
@@ -27,8 +27,9 @@ import { stepProjectiles, resolveClashes, clearClash, lastEntries } from './clas
 import { createLab } from './lab.js';
 import { Bot } from './bot.js';
 
-// World: one big side-scrolling city. Matches show a camera view of it, menus / Custom the whole map.
-const W = 1200, H = 360;
+// World size follows the map (medium 840 x 472, large 1120 x 630). Matches show a camera that
+// follows the fight; menus / Custom show the whole map.
+let W = 560, H = 315;
 const TICK_MS = 1000 / 60;
 const MAX_BRUSH = 30;
 const WIND_STRENGTH = 0.8; // force per grid cell of mouse drag
@@ -57,7 +58,7 @@ Player.particles = particles;                                           // dust 
 particles.bodies = world.players;                                        // projectiles can hit benders
 particles.onHit = (attackerId, victim, dmg) => creditDamage(world, attackerId, dmg); // ...and charge the attacker's ult
 
-const state = { mode: 'menu', selected: EL.SAND, brush: 4, paused: false, heatView: false, fps: 0, count: 0, map: null };
+const state = { mode: 'menu', selected: EL.SAND, brush: 4, paused: false, heatView: false, debugView: false, fps: 0, count: 0, map: null };
 let match = null, lastMatch = null, resultsShown = false, matchOverSeen = false;
 let mapTick = null; // live map hazards (the subway train)
 const mapEnv = { fx, players: world.players };
@@ -84,8 +85,8 @@ canvas.style.aspectRatio = `${W} / ${H}`;
 // (only bots alive) everyone. Menus and Custom show the whole map.
 const MOVEBAR_H = 118;
 const HUD_STRIP = 64;              // desktop: the strip above the map for the HUD (index.html body.play #stage)             // desktop: screen pixels kept under the map for the move bar
-const SHOW_FULL_MAP = true;        // matches show the whole city (false: a camera following you)
-const MIN_VIEW_AREA = (W * H) / 4; // at zoom 1 you always see at least a quarter of the map
+const SHOW_FULL_MAP = false;       // matches: a camera following the fight (true: always the whole map)
+const MIN_VIEW_AREA = 560 * 315;   // the closest the camera gets: as much as the old small maps showed
 // View size (cells) for a screen of this aspect ratio: exactly a quarter of the map's area.
 function baseViewFor(aspect) {
   let h = Math.round(Math.sqrt(MIN_VIEW_AREA / aspect)), w = Math.round(h * aspect);
@@ -93,7 +94,6 @@ function baseViewFor(aspect) {
   if (h > H) { h = H; w = Math.min(W, Math.round(H * aspect)); }
   return [w, h];
 }
-const MAX_ZOOM = 1.6;
 let camMode = false, camX = 0, camY = 0, camSnap = true, camZoom = 1, baseW = W, baseH = H;
 const isHuman = (p) => !!p.source && !p.source.startsWith('cpu') && p.source !== 'net';
 function camTargets() {
@@ -117,10 +117,11 @@ function updateCamera() {
       for (const p of list) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x + 5); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y + 18); }
       tx = (x0 + x1) / 2; ty = (y0 + y1) / 2;
       want = Math.max(1, (x1 - x0 + 140) / baseW, (y1 - y0 + 100) / baseH);
-      want = Math.min(want, MAX_ZOOM, W / baseW, H / baseH);
+      want = Math.min(want, Math.max(W / baseW, H / baseH)); // zoom out as far as the whole map, no further
     }
   }
   if (camSnap) camZoom = want; else camZoom += (want - camZoom) * 0.05;
+  camZoom = Math.min(camZoom, Math.max(W / baseW, H / baseH));
   const vw = Math.min(W, Math.round(baseW * camZoom)), vh = Math.min(H, Math.round(baseH * camZoom));
   if (vw !== view.w || vh !== view.h) { view.w = vw; view.h = vh; renderer.setView(view); }
   const cx = tx - view.w / 2, cy = ty - view.h * (isTouchDevice ? 0.42 : 0.55); // a bit more room above
@@ -129,6 +130,13 @@ function updateCamera() {
   camX = Math.max(0, Math.min(W - view.w, camX)); camY = Math.max(0, Math.min(H - view.h, camY));
   view.x = Math.round(camX); view.y = Math.round(camY);
   sfx.setListener(view.x + view.w / 2, view.w); // sounds pan / fade relative to the camera
+}
+
+// The map just changed (maybe its size): the camera starts over on it.
+function worldResized() {
+  W = grid.w; H = grid.h;
+  camSnap = true;
+  if (!camMode) { view.x = 0; view.y = 0; view.w = W; view.h = H; renderer.setView(view); }
 }
 
 function layout() { // the canvas gets more room when the sandbox toolbar is hidden
@@ -183,8 +191,10 @@ function setPlayers(list) {
 }
 
 function useMap(m) {
+  const { spawns, tick } = loadMap(grid, particles, m); // (resizes the world to the map)
+  worldResized();
   resetPhysics();
-  const { spawns, tick } = loadMap(grid, particles, m);
+  scanPipes(); // remember every gas line / water main / cable so breaking one bursts (and place cars, barrels)
   state.map = m.id;
   mapTick = tick || null;
   return spawns;
@@ -222,7 +232,7 @@ function toMenu() {
   state.mode = 'menu'; state.paused = false;
   match = null;
   setPlayers([]);
-  useMap(MAPS[0]); // the city behind the menu
+  useMap(MAPS[0]); // a map behind the menu
   layout();
   screens.updateHUD(null);
 }
@@ -286,7 +296,7 @@ const screens = createScreens(stage, MAPS, {
   onQuit: toMenu,
   onHostOnline: hostOnline,
   onLab: () => {
-    startMatch({ format: 'duel', win: 'training', map: MAPS[0], training: true, infinite: true, lab: true },
+    startMatch({ format: 'duel', win: 'training', map: LAB_MAP, training: true, infinite: true, lab: true },
       [{ name: 'You', type: lab.me, source: 'local', team: 0 }, { name: 'Dummy', type: 'water', source: 'cpu-dummy', team: 1 }]);
     lab.start();
   },
@@ -363,6 +373,7 @@ async function joinOnline(code, name, type, status) {
       state.mode = 'guest'; state.paused = false; match = null; mapTick = null; resultsShown = false;
       setPlayers([]);
       loadMap(grid, particles, MAPS.find((m) => m.id === guestView.map) || MAPS[0]); // same map locally; snapshots send only changes
+      worldResized(); resetPhysics(); scanPipes(); // (same cars and barrels as the host)
       Object.assign(guestView, { players: [], hud: null, since: 0 });
       screens.hideMenu(); layout();
     },
@@ -475,6 +486,13 @@ canvas.addEventListener('wheel', (e) => {
   ui.refresh();
 }, { passive: false });
 
+// The debug view's label + legend, top-left of the map.
+const debugBadge = document.createElement('div');
+debugBadge.className = 'debugbadge';
+debugBadge.hidden = true;
+debugBadge.innerHTML = '<b>DEBUG</b> wind + heat · <span class="dbg-heat"></span> cold → hot · <i style="color:#ff6a6a">■</i> high pressure <i style="color:#7aa0ff">■</i> vacuum · P to close';
+stage.append(debugBadge);
+
 // ---------- keys ----------
 const keyToTool = new Map(TOOLS.map((t) => [t.key, t.id]));
 const BENDER_KEYS = new Set(['arrowleft', 'arrowright', 'arrowup', 'arrowdown', 'z', 'x', 'c', 'a', 's', 'v', 'p']);
@@ -485,6 +503,10 @@ window.addEventListener('keydown', (e) => {
   if (GAME_KEYS.has(k) || k === ' ') e.preventDefault();
 
   if (k === 'escape') { pauseOrBack(); return; }
+  // Debug view (any mode, online too): wind arrows + heat vision + air pressure. P, or F2 when a
+  // second player on this keyboard is using P as an attack key.
+  const pTaken = state.mode === 'match' && world.players.some((p) => p.source === 'kb2');
+  if ((k === 'p' && !pTaken) || k === 'f2') { e.preventDefault(); state.debugView = !state.debugView; debugBadge.hidden = !state.debugView; return; }
   if (k === 'f' && !tools() && (state.mode === 'match' || state.mode === 'guest')) { goFullscreen(!(document.fullscreenElement || document.webkitFullscreenElement)); return; }
   if (!tools() || BENDER_KEYS.has(k)) return;
 
@@ -634,7 +656,7 @@ function frame(now) {
 
   sounds();
   updateCamera();
-  renderer.draw(state.heatView);
+  renderer.draw(state.heatView, state.debugView && !state.heatView);
   if (tools() && mouse.inside) renderer.drawBrush(mouse.x, mouse.y, state.brush);
   renderer.present(state.heatView ? null : state.mode === 'guest' ? guestView.players : world.players, particles, lab.active ? lastEntries : null, state.mode === 'guest' ? null : lastEntries);
   // Brightness: flashes brighten, an ultimate cinematic darkens the world for a moment.
@@ -669,5 +691,5 @@ requestAnimationFrame(frame);
 
 // Test hook: ?debug exposes the internals to the console.
 if (new URLSearchParams(window.location.search).has('debug')) {
-  window.__bs = { startMatch, MAPS, musicState, juice, Bot, sfx, state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
+  window.__bs = { startMatch, MAPS, useMap, layout, view, musicState, juice, Bot, sfx, state, world, grid, particles, get net() { return net; }, get guest() { return guest; }, guestView, get match() { return match; } };
 }

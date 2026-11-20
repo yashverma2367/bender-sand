@@ -1,5 +1,5 @@
 // Grid -> pixels. Normal view (with heat glow, fire flicker, wind tint) or heat-map view.
-import { EL, PALETTE, SHADES, IGNITE_T, pack } from './elements.js';
+import { EL, PALETTE, SHADES, IGNITE_T, STRENGTH, pack } from './elements.js';
 import { FIELD } from './grid.js';
 import { BENDER_TYPES, BW, BH, MAX_HP } from './benders.js';
 import { drawSprite } from './sprite.js';
@@ -7,7 +7,10 @@ import { juice } from './juice.js';
 import { bursts, hasJetMaterial, JET_ANGLE, JET_SPREAD } from './physics.js';
 
 const BG = PALETTE[0];
+const CRACK_C = pack('#1c1714'); // fracture lines on damaged walls
 const WIND_TINT = pack('#9fd4ff');
+const DBG_AIR = pack('#0c0d12'), DBG_SOLID = pack('#4a4f63'), PRESS_HI = pack('#ff3b3b'), PRESS_LO = pack('#3b6cff');
+const WIND_COLS = ['#7fd8ff', '#9ff0c8', '#e8f070', '#ffb340', '#ff6a3a'].map(pack); // calm breeze -> blast
 const AFTERIMAGE = pack('#cfe8ff');
 const WATER_IMG = pack('#3a7fe6');
 
@@ -48,15 +51,21 @@ const HEAT = gradient([
 // world-sized canvas; only the camera's view rectangle is drawn each frame and copied to the
 // visible canvas, which CSS scales up.
 export function createRenderer(grid, canvas) {
-  const { w, h } = grid;
+  let { w, h } = grid;
   const ctx = canvas.getContext('2d');
   const worldCanvas = document.createElement('canvas');
   worldCanvas.width = w;
   worldCanvas.height = h;
   const wctx = worldCanvas.getContext('2d');
-  const img = wctx.createImageData(w, h);
-  const buf = new Uint32Array(img.data.buffer);
+  let img = wctx.createImageData(w, h);
+  let buf = new Uint32Array(img.data.buffer);
   let view = { x: 0, y: 0, w, h };
+  function fitWorld() { // maps come in different sizes: follow the grid
+    if (grid.w === w && grid.h === h) return;
+    w = grid.w; h = grid.h;
+    worldCanvas.width = w; worldCanvas.height = h;
+    img = wctx.createImageData(w, h); buf = new Uint32Array(img.data.buffer);
+  }
 
   // Camera rectangle in world cells (x, y integers). Resizes the visible canvas to match.
   function setView(v) {
@@ -64,8 +73,14 @@ export function createRenderer(grid, canvas) {
     if (canvas.width !== v.w || canvas.height !== v.h) { canvas.width = v.w; canvas.height = v.h; }
   }
 
-  function draw(heatView) {
-    const { type, shade, temp, life, vx, vy, fw, backdrop } = grid;
+  // heatView: the sandbox heat map. debug: the P view (heat colors for everything, air pressure
+  // tinted red/blue, wind arrows drawn on top in present()).
+  let debugOn = false;
+  function draw(heatView, debug = false) {
+    fitWorld();
+    debugOn = debug;
+    const rho = grid.rho;
+    const { type, shade, temp, life, vx, vy, fw, backdrop, crack } = grid;
     const x0 = Math.max(0, view.x), x1 = Math.min(w, view.x + view.w + 1);
     const y0 = Math.max(0, view.y), y1 = Math.min(h, view.y + view.h + 1);
     for (let y = y0; y < y1; y++) {
@@ -76,6 +91,18 @@ export function createRenderer(grid, canvas) {
 
         if (heatView) {
           buf[i] = t === 0 ? BG : HEAT[Math.max(0, Math.min(255, (heatPos(temp[i]) * 255) | 0))];
+          continue;
+        }
+        if (debug) {
+          if (t === 0) { // air: dark, tinted by pressure (red = compressed, blue = vacuum)
+            const pr = rho ? rho[frow + ((x / FIELD) | 0)] : 0;
+            buf[i] = pr > 0.15 ? blend(DBG_AIR, PRESS_HI, Math.min(0.75, pr * 0.18)) : pr < -0.15 ? blend(DBG_AIR, PRESS_LO, Math.min(0.75, -pr * 0.18)) : DBG_AIR;
+          } else { // everything solid / liquid / gas by temperature (online guests only know hot things)
+            let T = temp[i];
+            if (t === EL.FIRE) T = Math.max(T, 800); else if (t === EL.LAVA) T = Math.max(T, 1200); else if (life[i] && IGNITE_T[t] !== Infinity) T = Math.max(T, 600);
+            const c = HEAT[Math.max(0, Math.min(255, (heatPos(T) * 255) | 0))];
+            buf[i] = T > 60 || T < 0 ? c : blend(c, DBG_SOLID, 0.55); // room-temperature stuff stays readable as gray
+          }
           continue;
         }
 
@@ -108,6 +135,12 @@ export function createRenderer(grid, canvas) {
         } else if (T > 350) {
           const g = Math.min(1, (T - 350) / 900);
           c = blend(c, GLOW[(g * 63) | 0], g * 0.9);
+        }
+        const ck = crack[i];
+        if (ck > 12 && t !== EL.FIRE) { // cracked: dark fracture lines that spread as damage builds
+          const hsh = (x * 73856093 ^ y * 19349663) >>> 0, lvl = ck / STRENGTH[t];
+          if ((hsh % 997) / 997 < lvl * 0.55) c = blend(c, CRACK_C, 0.75);
+          else c = blend(c, CRACK_C, lvl * 0.18);
         }
         buf[i] = c;
       }
@@ -410,10 +443,30 @@ export function createRenderer(grid, canvas) {
     }
   }
 
+  // Wind arrows: one per 2x2 air blocks (8 x 8 cells), from the block's middle along the flow,
+  // longer and hotter-colored the stronger it blows, with a bright head.
+  function drawWind() {
+    const { vx, vy, fw, fh } = grid;
+    const fx0 = Math.max(0, Math.floor(view.x / FIELD)), fx1 = Math.min(fw, Math.ceil((view.x + view.w) / FIELD));
+    const fy0 = Math.max(0, Math.floor(view.y / FIELD)), fy1 = Math.min(fh, Math.ceil((view.y + view.h) / FIELD));
+    for (let fy = fy0 - (fy0 & 1); fy < fy1; fy += 2) for (let fx = fx0 - (fx0 & 1); fx < fx1; fx += 2) {
+      const f = fy * fw + fx, ux = vx[f], uy = vy[f], m = Math.hypot(ux, uy);
+      if (m < 0.25) continue;
+      const len = Math.min(9, 2 + m * 1.6), dx = ux / m, dy = uy / m;
+      const cx = fx * FIELD + FIELD, cy = fy * FIELD + FIELD;
+      const col = WIND_COLS[Math.min(WIND_COLS.length - 1, (m * 1.2) | 0)];
+      for (let k = 0; k <= len; k++) {
+        const X = Math.round(cx + dx * k), Y = Math.round(cy + dy * k);
+        if (X >= 0 && X < w && Y >= 0 && Y < h) buf[Y * w + X] = k >= len - 1 ? WHITE : blend(buf[Y * w + X], col, 0.85);
+      }
+    }
+  }
+
   function present(players, particles, labels = null, owners = null) {
     if (particles) drawParticles(particles);
     const list = players ? (Array.isArray(players) ? players : [players]) : [];
     for (const p of list) drawPlayer(p);
+    if (debugOn) drawWind();
     drawDust();
     drawBursts();
     drawEdgeArrows(list);

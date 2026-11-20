@@ -119,7 +119,6 @@ export class HostSession {
     return [
       { name: this.me.name, type: this.me.type, team: this.me.team, source: 'local' },
       ...live.map((g) => ({ name: g.name, type: g.type, team: g.team, source: 'net', net: g.input })),
-      ...this.bots.map((b) => ({ name: b.name, type: b.type, team: b.team, source: 'cpu-' + b.level })),
     ];
   }
 
@@ -134,6 +133,9 @@ export class HostSession {
   // Right after the host builds the match map: guests build the same map locally, so each
   // guest's snapshot baseline starts from it (only changes are sent, not the whole city).
   baseline() {
+    const g0 = this.grid;
+    if (this.cur.cells.length !== g0.w * g0.h || this.cur.wind.length !== g0.fw * g0.fh) this.cur = { cells: new Uint16Array(g0.w * g0.h), wind: new Uint8Array(g0.fw * g0.fh), dust: new Uint8Array(g0.fw * g0.fh) };
+    for (const g of this.guests) if (g.enc) g.enc.fit(g0);
     cellCodes(this.grid, this.cur.cells);
     for (const g of this.guests) if (g.enc) g.enc.cells.set(this.cur.cells);
   }
