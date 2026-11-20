@@ -648,9 +648,12 @@ function frame(now) {
     if (state.mode === 'guest') { if (guest) guestTick(now); }
     else if (!state.paused) tick();
     acc -= TICK_MS;
-    if (net && match && (++netTicks & 1) === 0) { net.sendSnapshot(world, match, { shake, flash, paused: state.paused, pu: juice.popups.map((q) => [Math.round(q.x), Math.round(q.y), q.text, q.color, q.life]) }, netSounds); netSounds = []; }
     steps++;
   }
+  // Online host: one snapshot per frame at most, about 20 a second (every 3 ticks), so a slow frame
+  // that runs several ticks doesn't also encode several snapshots.
+  netTicks += steps;
+  if (net && match && netTicks >= 3) { netTicks = 0; net.sendSnapshot(world, match, { shake, flash, paused: state.paused, pu: juice.popups.map((q) => [Math.round(q.x), Math.round(q.y), q.text, q.color, q.life]) }, netSounds); netSounds = []; }
   if (steps === 4) acc = 0; // too slow: drop backlog instead of spiraling
   if (host) stepJuice();
 

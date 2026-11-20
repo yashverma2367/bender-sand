@@ -9,7 +9,13 @@ import { SnapEncoder, cellCodes, windCodes, dustCodes, pack, unpack, inputBits, 
 import { readyMask } from './abilities.js';
 
 export const MAX_PLAYERS = 4;
-const SNAP_BACKLOG = 1 << 20; // skip a snapshot for a guest whose connection is this far behind
+// Snapshots are diffs, so a guest that's behind can simply skip some: the next one carries every
+// change since the last one they got. Keep each guest's queue short (or they see the game seconds
+// late) and their stream inside a bandwidth budget (big destruction = big diffs = fewer, larger
+// snapshots instead of a backlog).
+const SNAP_BACKLOG = 48 * 1024;       // bytes waiting in a guest's channel before we skip
+const SNAP_RATE = 220 * 1024;         // bytes per second per guest, on average
+const SNAP_BURST = 96 * 1024;         // ...with this much saved up for spikes
 
 const sendJSON = (ch, msg) => { if (ch && ch.readyState === 'open') ch.send(JSON.stringify(msg)); };
 
@@ -26,6 +32,7 @@ export class HostSession {
     this.inMatch = false;
     this.room = null;
     this.cur = { cells: new Uint16Array(grid.w * grid.h), wind: new Uint8Array(grid.fw * grid.fh), dust: new Uint8Array(grid.fw * grid.fh) };
+    this.rows = new Uint8Array(grid.h); // rows changed by the latest cellCodes()
   }
 
   async open() {
@@ -135,6 +142,7 @@ export class HostSession {
   baseline() {
     const g0 = this.grid;
     if (this.cur.cells.length !== g0.w * g0.h || this.cur.wind.length !== g0.fw * g0.fh) this.cur = { cells: new Uint16Array(g0.w * g0.h), wind: new Uint8Array(g0.fw * g0.fh), dust: new Uint8Array(g0.fw * g0.fh) };
+    if (this.rows.length !== g0.h) this.rows = new Uint8Array(g0.h);
     for (const g of this.guests) if (g.enc) g.enc.fit(g0);
     cellCodes(this.grid, this.cur.cells);
     for (const g of this.guests) if (g.enc) g.enc.cells.set(this.cur.cells);
@@ -160,9 +168,14 @@ export class HostSession {
   sendSnapshot(world, match, fx, sounds = []) {
     const live = this.guests.filter((g) => !g.gone && g.snap && g.snap.readyState === 'open');
     if (!live.length) return;
-    cellCodes(this.grid, this.cur.cells);
+    cellCodes(this.grid, this.cur.cells, this.rows);
     windCodes(this.grid, this.cur.wind);
     dustCodes(this.grid, this.cur.dust);
+    const now = performance.now();
+    for (const g of live) { // every guest remembers which rows changed until they're sent them
+      g.enc.markRows(this.rows);
+      g.tokens = Math.min(SNAP_BURST, (g.tokens ?? SNAP_BURST) + ((now - (g.tokAt || now)) / 1000) * SNAP_RATE); g.tokAt = now;
+    }
     const json = {
       p: world.players.map(playerVisual),
       cb: burstState(),
@@ -174,11 +187,11 @@ export class HostSession {
       fx, paused: fx.paused, s: sounds,
     };
     for (const g of live) {
-      if (g.busy > 2 || g.snap.bufferedAmount > SNAP_BACKLOG) continue; // let it catch up (diff stays valid)
+      if (g.busy > 0 || g.tokens < 0 || g.snap.bufferedAmount > SNAP_BACKLOG) continue; // let it catch up (the next diff covers it)
       const bytes = g.enc.encode(this.cur, world.particles, json);
       g.busy++;
       g.chain = (g.chain || Promise.resolve()).then(() => pack(bytes)).then((z) => {
-        g.busy--;
+        g.busy--; g.tokens -= z.length;
         if (g.snap.readyState === 'open') { g.snap.send(z); g.sent = (g.sent || 0) + z.length; }
       }).catch(() => { g.busy--; });
     }

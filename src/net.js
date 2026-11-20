@@ -49,18 +49,22 @@ export async function unpack(bytes) {
 }
 
 // ---------- cell / wind codes ----------
-export function cellCodes(grid, out) {
-  const { type, shade, temp, life } = grid;
+// rows (optional Uint8Array, one per grid row): set to 1 for every row whose codes changed since
+// the previous call on the same `out` (so encoders only diff the rows that changed).
+export function cellCodes(grid, out, rows = null) {
+  const { type, shade, temp, life, w } = grid;
+  if (rows) rows.fill(0);
   for (let i = 0; i < out.length; i++) {
     const t = type[i];
-    if (t === 0) { out[i] = 0; continue; }
+    if (t === 0) { if (out[i] !== 0) { out[i] = 0; if (rows) rows[(i / w) | 0] = 1; } continue; }
     let vis = 0;
     if (t === EL.FIRE) { const L = life[i]; vis = L > 30 ? 0 : L > 15 ? 1 : L > 6 ? 2 : 3; }
     else if (t === EL.SMOKE) vis = Math.min(31, life[i] >> 1);
     else if (IGNITE_T[t] !== Infinity && life[i] > 0) vis = 31;
     else if (temp[i] > 350) vis = Math.min(30, (((temp[i] - 350) / 32) | 0) + 1);
     const sh = t === EL.WATER || t === EL.LAVA ? 0 : shade[i]; // their shimmer is done locally
-    out[i] = (t & 31) | (sh << 5) | (vis << 7);
+    const c = (t & 31) | (sh << 5) | (vis << 7);
+    if (out[i] !== c) { out[i] = c; if (rows) rows[(i / w) | 0] = 1; }
   }
   return out;
 }
@@ -89,18 +93,24 @@ export function windCodes(grid, out) {
 }
 
 // Runs of changed values: [skip, run, run x value] ...
-function writeDiff(w, cur, base, wide) {
+// rows / rowW (optional): only look at rows flagged in `rows` (runs stop at row ends).
+function writeDiff(w, cur, base, wide, rows = null, rowW = 0) {
   const body = new Writer(4096);
-  let i = 0, last = 0;
+  let last = 0;
   const n = cur.length;
-  while (i < n) {
-    if (cur[i] === base[i]) { i++; continue; }
-    let j = i;
-    while (j < n && cur[j] !== base[j]) j++;
-    body.varint(i - last); body.varint(j - i);
-    for (let k = i; k < j; k++) { if (wide) body.u16(cur[k]); else body.u8(cur[k]); base[k] = cur[k]; }
-    last = j; i = j;
-  }
+  const scan = (from, to) => {
+    let i = from;
+    while (i < to) {
+      if (cur[i] === base[i]) { i++; continue; }
+      let j = i;
+      while (j < to && cur[j] !== base[j]) j++;
+      body.varint(i - last); body.varint(j - i);
+      for (let k = i; k < j; k++) { if (wide) body.u16(cur[k]); else body.u8(cur[k]); base[k] = cur[k]; }
+      last = j; i = j;
+    }
+  };
+  if (rows) { for (let y = 0; y < rows.length; y++) if (rows[y]) { scan(y * rowW, Math.min(n, (y + 1) * rowW)); rows[y] = 0; } }
+  else scan(0, n);
   const b = body.done();
   w.u32(b.length); w.bytes(b);
 }
@@ -118,6 +128,8 @@ function readDiff(r, apply, wide) {
 const round = (k, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v && v.constructor === Float32Array ? Array.from(v) : v);
 const enc = new TextEncoder(), dec = new TextDecoder();
 
+const MAX_SENT = 1400; // particles per snapshot
+
 // Host: one encoder per guest (each remembers what that guest already has).
 export class SnapEncoder {
   constructor(grid) {
@@ -125,21 +137,28 @@ export class SnapEncoder {
     this.wind = new Uint8Array(grid.fw * grid.fh);
     this.dust = new Uint8Array(grid.fw * grid.fh);
   }
-  reset() { this.cells.fill(0); this.wind.fill(0); this.dust.fill(0); }
+  reset() { this.cells.fill(0); this.wind.fill(0); this.dust.fill(0); this.rows = null; } // (rows = null: diff everything next time)
   fit(grid) { // maps come in different sizes
     if (this.cells.length !== grid.w * grid.h) this.cells = new Uint16Array(grid.w * grid.h);
     if (this.wind.length !== grid.fw * grid.fh) { this.wind = new Uint8Array(grid.fw * grid.fh); this.dust = new Uint8Array(grid.fw * grid.fh); }
+    this.rowW = grid.w; this.rows = new Uint8Array(grid.h); // baseline = the map: nothing to send yet
   }
+  // Rows that changed since the host last computed codes: remembered until this guest is sent them.
+  markRows(changed) { if (this.rows) for (let y = 0; y < changed.length; y++) this.rows[y] |= changed[y]; }
   // cur: shared per-tick codes { cells, wind }, particles, json: anything serializable.
   encode(cur, ps, json) {
     const w = new Writer();
     const j = enc.encode(JSON.stringify(json, round));
     w.u32(j.length); w.bytes(j);
-    writeDiff(w, cur.cells, this.cells, true);
+    writeDiff(w, cur.cells, this.cells, true, this.rows, this.rowW);
+    if (!this.rows && this.rowW) this.rows = new Uint8Array(this.cells.length / this.rowW);
     writeDiff(w, cur.wind, this.wind, false);
     writeDiff(w, cur.dust, this.dust, false);
-    w.u16(ps.n);
-    for (let i = 0; i < ps.n; i++) {
+    // Particles: all of them, up to MAX_SENT; past that an even sample (a huge blast still reads as a huge blast).
+    const step = ps.n > MAX_SENT ? ps.n / MAX_SENT : 1, count = Math.min(ps.n, MAX_SENT);
+    w.u16(count);
+    for (let q = 0; q < count; q++) {
+      const i = Math.floor(q * step);
       w.i16(Math.round(ps.x[i] * 16)); w.i16(Math.round(ps.y[i] * 16));
       w.u8(Math.max(-127, Math.min(127, Math.round(ps.vx[i] * 8))) & 255);
       w.u8(Math.max(-127, Math.min(127, Math.round(ps.vy[i] * 8))) & 255);
